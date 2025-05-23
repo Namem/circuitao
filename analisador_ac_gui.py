@@ -11,6 +11,16 @@ class ACCircuitAnalyzerApp:
         master.title("Analisador de Circuito CA Série RLC")
         master.geometry("600x700") # Ajustado para melhor visualização
 
+        # ... (depois de master.title(...))
+        # --- Configuração da Barra de Menu ---
+        menubar = tk.Menu(master)
+        master.config(menu=menubar) # Adiciona a barra de menu à janela principal
+
+        help_menu = tk.Menu(menubar, tearoff=0) # tearoff=0 remove a linha pontilhada feia
+        help_menu.add_command(label="Sobre", command=self.show_about_dialog)
+
+        menubar.add_cascade(label="Ajuda", menu=help_menu)
+
         # Estilo
         self.style = ttk.Style()
         self.style.theme_use('clam') # Um tema moderno
@@ -62,9 +72,18 @@ class ACCircuitAnalyzerApp:
         self.freq_entry.grid(row=5, column=1, padx=5, pady=5, sticky=tk.EW)
         self.freq_entry.insert(0, "60") # Valor padrão
 
+        # Frame para os botões de ação
+        action_buttons_frame = ttk.Frame(main_frame)
+        action_buttons_frame.pack(pady=20)
+
         # Botão de Análise
-        analyze_button = ttk.Button(main_frame, text="Analisar Circuito", command=self.analyze_circuit)
-        analyze_button.pack(pady=20, ipadx=10, ipady=5)
+        analyze_button = ttk.Button(action_buttons_frame, text="Analisar Circuito", command=self.analyze_circuit)
+        analyze_button.pack(side=tk.LEFT, padx=5, ipadx=10, ipady=5)
+
+        # Botão Limpar
+        clear_button = ttk.Button(action_buttons_frame, text="Limpar Entradas", command=self.clear_entries)
+        clear_button.pack(side=tk.LEFT, padx=5, ipadx=10, ipady=5)
+
 
         # --- Seção de Saídas ---
         output_frame = ttk.LabelFrame(main_frame, text="Resultados da Análise", padding="15")
@@ -77,6 +96,49 @@ class ACCircuitAnalyzerApp:
         # Nota sobre a limitação
         note_label = ttk.Label(main_frame, text="Nota: Esta ferramenta analisa um circuito RLC série fixo.\nUm construtor gráfico de circuitos não está implementado.", justify=tk.CENTER)
         note_label.pack(pady=(10,0))
+
+    def clear_entries(self):
+        """
+        Limpa os campos de entrada e os restaura para os valores padrão.
+        Também limpa a área de resultados.
+        """
+        # Restaurar valores padrão das entradas
+        self.r_entry.delete(0, tk.END)
+        self.r_entry.insert(0, "100")
+
+        self.l_entry.delete(0, tk.END)
+        self.l_entry.insert(0, "0.1")
+
+        self.c_entry.delete(0, tk.END)
+        self.c_entry.insert(0, "0.00001")
+
+        self.v_mag_entry.delete(0, tk.END)
+        self.v_mag_entry.insert(0, "10")
+
+        self.v_phase_entry.delete(0, tk.END)
+        self.v_phase_entry.insert(0, "0")
+
+        self.freq_entry.delete(0, tk.END)
+        self.freq_entry.insert(0, "60")
+
+        # Limpar área de resultados
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.config(state=tk.DISABLED)
+    
+    def show_about_dialog(self):
+        """
+        Exibe a caixa de diálogo "Sobre".
+        """
+    messagebox.showinfo(
+        "Sobre Analisador de Circuito CA",
+        "Analisador de Circuito CA Série RLC\n\n"
+        "Versão: 1.0.1\n"
+        "Desenvolvido como exemplo de aplicação Tkinter.\n\n"
+        "Funcionalidades:\n"
+        "- Análise de circuito RLC série em CA.\n"
+        "- Cálculo de impedâncias, correntes e tensões."
+    )
 
 
     def analyze_circuit(self):
