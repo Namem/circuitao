@@ -103,8 +103,8 @@ class ACCircuitAnalyzerApp:
         entry_width = 130 
         
         self.r_check = ctk.CTkCheckBox(input_frame, text="R [Ω]:", variable=self.include_r_var, command=self._on_include_component_change)
-        self.r_check.grid(row=0, column=0, columnspan=2, padx=(10,0), pady=8, sticky="w") # Colspan 2 for label
-        self.r_entry = ctk.CTkEntry(input_frame, width=entry_width) 
+        self.r_check.grid(row=0, column=0, columnspan=2, padx=(10,0), pady=8, sticky="w")
+        self.r_entry = ctk.CTkEntry(input_frame, width=entry_width)
         self.r_entry.grid(row=0, column=2, padx=(0,10), pady=8, sticky="ew"); self.r_entry.insert(0, "10")
         self.r_entry.bind("<FocusOut>", self._on_parameter_change); self.r_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['r_val'] = self.r_entry
@@ -122,7 +122,7 @@ class ACCircuitAnalyzerApp:
         self.c_entry.grid(row=2, column=2, padx=(0,10), pady=8, sticky="ew"); self.c_entry.insert(0, "0.00001")
         self.c_entry.bind("<FocusOut>", self._on_parameter_change); self.c_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['c_val'] = self.c_entry
-                
+        
         ctk.CTkLabel(input_frame, text="Tensão Fonte (Vmag) [V]:").grid(row=3, column=0, columnspan=2, padx=10, pady=8, sticky="w")
         self.v_mag_entry = ctk.CTkEntry(input_frame, width=entry_width)
         self.v_mag_entry.grid(row=3, column=2, padx=(0,10), pady=8, sticky="ew"); self.v_mag_entry.insert(0, "10")
@@ -192,12 +192,13 @@ class ACCircuitAnalyzerApp:
         plot_selection_label = ctk.CTkLabel(left_panel_scroll_frame, text="Grandezas para Plotar", font=ctk.CTkFont(size=16, weight="bold"))
         plot_selection_label.pack(pady=(15,5), anchor="w", padx=10)
         
-        plot_magnitudes_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
-        plot_magnitudes_frame.pack(fill="x", padx=10, pady=(0,5))
-        ctk.CTkLabel(plot_magnitudes_frame, text="Magnitudes (Eixo Y Primário):", font=ctk.CTkFont(size=13)).pack(anchor="w", padx=10, pady=(5,2))
+        plot_selection_outer_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
+        plot_selection_outer_frame.pack(fill="x", padx=10, pady=(0,5))
+
+        ctk.CTkLabel(plot_selection_outer_frame, text="Magnitudes (Eixo Y Primário):", font=ctk.CTkFont(size=13)).pack(anchor="w", padx=10, pady=(5,2))
         
         self.magnitude_checkboxes_widgets = {}
-        mag_check_frame_cols = ctk.CTkFrame(plot_magnitudes_frame, fg_color="transparent")
+        mag_check_frame_cols = ctk.CTkFrame(plot_selection_outer_frame, fg_color="transparent")
         mag_check_frame_cols.pack(fill="x", padx=5, pady=(0,5))
         mag_options_per_row = 2 
         for i, name in enumerate(self.magnitude_plot_vars.keys()):
@@ -262,20 +263,19 @@ class ACCircuitAnalyzerApp:
         self.toolbar_embedded.update()
         self.toolbar_embedded.grid(row=1, column=0, sticky="ew", padx=2, pady=(0,2))
         
-        self._clear_embedded_plot()
-        # Adia a chamada inicial para garantir que todos os widgets estejam prontos
+        # Chamadas iniciais adiadas
         self.master.after(10, self._on_include_component_change) 
         self.master.after(50, self._trigger_realtime_plot_update) 
 
-    def _on_parameter_change(self, event=None, from_combobox_value=None): # Renomeado e unificado
+
+    def _on_parameter_change(self, event=None, from_combobox_value=None): # Renomeado
         self._trigger_realtime_plot_update(from_combobox_value=from_combobox_value)
 
     def _on_formatting_change(self, event_or_choice=None): # Renomeado
-        # Se houver resultados textuais, reanalisa para atualizar a formatação
-        if self.results_text.get("1.0", "end-1c").strip(): # Verifica se há texto
-             self.analyze_circuit() # Força reanálise completa para atualizar o texto
-            
-    def _on_include_component_change(self, event=None): # event=None para compatibilidade
+        if self.results_text.get("1.0", "end-1c").strip():
+             self.analyze_circuit()
+
+    def _on_include_component_change(self, event=None): # NOVO
         self.r_entry.configure(state="normal" if self.include_r_var.get() else "disabled")
         if not self.include_r_var.get() and self.r_entry.get() != "0": 
             self.r_entry.delete(0,tk.END); self.r_entry.insert(0,"0")
@@ -382,10 +382,8 @@ class ACCircuitAnalyzerApp:
 
     def _validate_all_parameters(self, silent=True, check_detail_freq=False):
         self._clear_all_entry_error_styles(); params={}; error_messages=[]; error_fields=[]
-        def gf(ew,pn,hn,include_var): # include_var é opcional e um BooleanVar
-            if include_var is not None and not include_var.get(): 
-                params[pn]=0.0 # Define como 0 se não incluído, mas não é um erro por si só
-                return 0.0 
+        def gf(ew,pn,hn,include_var):
+            if include_var is not None and not include_var.get(): params[pn]=0.0; return 0.0 
             try: v=float(ew.get());params[pn]=v;return v
             except ValueError: error_messages.append(f"{hn} inválido(a)."); error_fields.append(pn); return None
         def gi(ew,pn,hn):
@@ -396,7 +394,7 @@ class ACCircuitAnalyzerApp:
         gf(self.r_entry,'r_val',"Resistor (R)", self.include_r_var)
         gf(self.l_entry,'l_val',"Indutor (L)", self.include_l_var)
         gf(self.c_entry,'c_val',"Capacitor (C)", self.include_c_var)
-        gf(self.v_mag_entry,'v_mag',"Tensão Fonte (Vmag)", None) # tk.BooleanVar(value=True) implícito
+        gf(self.v_mag_entry,'v_mag',"Tensão Fonte (Vmag)", None)
         gf(self.v_phase_entry,'v_phase_deg',"Fase Fonte (θv)", None)
 
         if self.include_r_var.get() and 'r_val' in params:
@@ -423,7 +421,7 @@ class ACCircuitAnalyzerApp:
         if check_detail_freq:
             fds=self.freq_details_entry.get()
             if fds:
-                dfv=gf(self.freq_details_entry,'freq_details_val',"Freq. para Detalhes", None)
+                dfv=gf(self.freq_details_entry,'freq_details_val',"Freq. para Detalhes", None) # include_var=None
                 if dfv is not None:
                     if dfv<=0:error_messages.append("Freq. para Detalhes > 0.");error_fields.append('freq_details')
                     else:params['freq_details']=dfv
@@ -441,7 +439,7 @@ class ACCircuitAnalyzerApp:
         l_val = params.get('l_val',0) if self.include_l_var.get() else 0.0
         c_val = params.get('c_val',0) if self.include_c_var.get() else 0.0
 
-        if l_val>1e-12 and c_val>1e-12:
+        if l_val>1e-12 and c_val>1e-12: 
             try: f0_resonance=1/(2*math.pi*math.sqrt(l_val*c_val))
             except ZeroDivisionError: f0_resonance=None
         
@@ -529,14 +527,9 @@ class ACCircuitAnalyzerApp:
                 if params['selected_magnitude_plots']:
                     first_mag_plot = params['selected_magnitude_plots'][0]
                     if first_mag_plot in all_plot_data_y and all_plot_data_y[first_mag_plot]:
-                        # Garante que data_y passado para _find_extremum não tem NaNs que causam erro no min/max
                         valid_data_for_extremum = [v for v in all_plot_data_y[first_mag_plot] if not np.isnan(v)]
                         if valid_data_for_extremum:
-                             # Se as frequências precisam ser filtradas também, isso é mais complexo.
-                             # Por agora, vamos assumir que frequencies e all_plot_data_y[first_mag_plot] têm o mesmo tamanho.
-                             # E que np.nan não será o extremo se houver números.
                              extremum_info_for_plot = self._find_extremum(frequencies, all_plot_data_y[first_mag_plot], first_mag_plot, params['topology'])
-
 
                 self._update_embedded_plot(frequencies, all_plot_data_y, params, f0_resonance=f0_calc, extremum_info_main=extremum_info_for_plot)
                 
@@ -554,8 +547,7 @@ class ACCircuitAnalyzerApp:
             self._clear_embedded_plot(error_message=f"Parâmetros inválidos:\n{', '.join(errors if errors else [])}")
     
     def _find_extremum(self, frequencies, data_y_single_series, plot_choice_single, topology):
-        if not data_y_single_series or not isinstance(data_y_single_series,(list,np.ndarray)) or len(data_y_single_series)==0:return None
-        # Filtra np.nan antes de min/max
+        if not data_y_single_series or not isinstance(data_y_single_series,(list, np.ndarray)) or len(data_y_single_series)==0: return None
         valid_data_points = [(freq, val) for freq, val in zip(frequencies, data_y_single_series) 
                              if isinstance(val,(int,float)) and not (math.isinf(val) or math.isnan(val))]
         if not valid_data_points: return None
@@ -565,30 +557,29 @@ class ACCircuitAnalyzerApp:
         extremum_type,extremum_value_raw,extremum_freq = None,None,None 
         if "|" in plot_choice_single: 
             if topology=="Série":
-                if "Z_total" in plot_choice_single:extremum_type="min"
-                else:extremum_type="max" 
+                if "Z_total" in plot_choice_single: extremum_type="min"
+                else: extremum_type="max" 
             elif topology=="Paralelo":
-                if "I_total" in plot_choice_single:extremum_type="min" 
-                elif "Z_total" in plot_choice_single:extremum_type="max" 
-                else:extremum_type="max" 
+                if "I_total" in plot_choice_single: extremum_type="min" 
+                elif "Z_total" in plot_choice_single: extremum_type="max" 
+                else: extremum_type="max" 
             
-            if extremum_type=="min":extremum_value_raw=min(temp_valid_data_y) if temp_valid_data_y else None
-            elif extremum_type=="max":extremum_value_raw=max(temp_valid_data_y) if temp_valid_data_y else None
-            else:return None 
+            if extremum_type=="min": extremum_value_raw=min(temp_valid_data_y) if temp_valid_data_y else None
+            elif extremum_type=="max": extremum_value_raw=max(temp_valid_data_y) if temp_valid_data_y else None
+            else: return None 
             
-            if extremum_value_raw is None:return None
+            if extremum_value_raw is None: return None
             try:
-                # Encontra o índice do valor extremo na lista de dados válidos (temp_valid_data_y)
                 extremum_idx_in_valid = temp_valid_data_y.index(extremum_value_raw)
-                extremum_freq = temp_frequencies[extremum_idx_in_valid] # Frequência correspondente
+                extremum_freq = temp_frequencies[extremum_idx_in_valid]
                 
                 unit_base=""
-                if "Z_total" in plot_choice_single:unit_base="Ω"
-                elif "I_total" in plot_choice_single:unit_base="A"
-                elif "V_" in plot_choice_single:unit_base="V"
+                if "Z_total" in plot_choice_single: unit_base="Ω"
+                elif "I_total" in plot_choice_single: unit_base="A"
+                elif "V_" in plot_choice_single: unit_base="V"
                 extremum_value_formatted=self._format_value(extremum_value_raw,unit_base)
                 return extremum_type,extremum_freq,extremum_value_raw,extremum_value_formatted
-            except (ValueError,IndexError):return None
+            except (ValueError,IndexError): return None
         return None
             
     def _clear_embedded_plot(self, error_message=None): 
@@ -617,45 +608,33 @@ class ACCircuitAnalyzerApp:
         self.l_entry.delete(0,"end"); self.l_entry.insert(0,"0.01")
         self.c_entry.delete(0,"end"); self.c_entry.insert(0,"0.00001")
         self.include_r_var.set(True); self.include_l_var.set(True); self.include_c_var.set(True)
-        self._on_include_component_change() # Para atualizar estado dos entries
-
+        self._on_include_component_change()
         self.v_mag_entry.delete(0,"end"); self.v_mag_entry.insert(0,"10")
         self.v_phase_entry.delete(0,"end"); self.v_phase_entry.insert(0,"0")
         self.freq_details_entry.delete(0,"end"); self.freq_details_entry.insert(0,"159") 
         self.freq_start_entry.delete(0,"end"); self.freq_start_entry.insert(0,"50")
         self.freq_end_entry.delete(0,"end"); self.freq_end_entry.insert(0,"1000")
         self.num_points_entry.delete(0,"end"); self.num_points_entry.insert(0,"300")
-        
-        for name, var in self.magnitude_plot_vars.items(): # Reseta checkboxes de plotagem
-            var.set(True if name == "|Z_total|" else False)
-        self.selected_phase_plot_var.set(self.phase_plot_options[0]) # "Nenhuma"
-
+        for name, var in self.magnitude_plot_vars.items(): var.set(True if name == "|Z_total|" else False)
+        self.selected_phase_plot_var.set(self.phase_plot_options[0])
         self.angle_unit.set("degrees"); self.circuit_topology_var.set("Série")
         self.decimal_places_var.set("3"); self.scientific_notation_var.set(False)
         self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self.results_text.configure(state="disabled")
         self._trigger_realtime_plot_update()
 
-    def show_about_dialog_ctk(self): # CORRIGIDO
+    def show_about_dialog_ctk(self):
         if self.about_dialog_window and self.about_dialog_window.winfo_exists():
-            self.about_dialog_window.lift()
-            self.about_dialog_window.focus_set()
-            return
-            
+            self.about_dialog_window.lift(); self.about_dialog_window.focus_set(); return
         self.about_dialog_window = ctk.CTkToplevel(self.master)
         self.about_dialog_window.title("Sobre Analisador de Circuito CA")
-        self.about_dialog_window.geometry("500x650") # Ajustado
+        self.about_dialog_window.geometry("500x650")
         self.about_dialog_window.transient(self.master) 
-        
-        self.about_dialog_window.after(50, lambda: self._grab_toplevel_safely(self.about_dialog_window))
-
+        self.about_dialog_window.after(50, lambda: self._grab_toplevel_safely(self.about_dialog_window)) # CORRIGIDO
         about_scroll_frame = ctk.CTkScrollableFrame(self.about_dialog_window, corner_radius=0, fg_color="transparent")
         about_scroll_frame.pack(expand=True, fill="both", padx=0, pady=0)
-        
-        content_frame = ctk.CTkFrame(about_scroll_frame) 
+        content_frame = ctk.CTkFrame(about_scroll_frame)
         content_frame.pack(expand=True, fill="x", padx=15, pady=15)
-
         ctk.CTkLabel(content_frame, text="Analisador de Circuito CA", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(0,15))
-        
         info_text = (
             "**Versão:** 2.0.0 (Super Sprint)\n\n"
             "Ferramenta para análise de circuitos RLC CA.\n\n"
@@ -692,17 +671,14 @@ class ACCircuitAnalyzerApp:
             "Agradecimentos por utilizar!"
         )
         ctk.CTkLabel(content_frame, text=info_text, justify="left", wraplength=420).pack(pady=10, padx=5, anchor="w")
-        
         close_button_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
         close_button_frame.pack(pady=(15,5), fill="x")
         close_button = ctk.CTkButton(close_button_frame, text="Fechar", command=self.about_dialog_window.destroy, width=100)
         close_button.pack()
-
         self.about_dialog_window.after(10, self._center_toplevel_after_draw, self.about_dialog_window)
         self.about_dialog_window.focus_set()
 
     def _center_toplevel_after_draw(self, toplevel_window):
-        # ... (Permanece o mesmo) ...
         toplevel_window.update_idletasks()
         master_x=self.master.winfo_x(); master_y=self.master.winfo_y()
         master_width=self.master.winfo_width(); master_height=self.master.winfo_height()
@@ -718,7 +694,6 @@ class ACCircuitAnalyzerApp:
         toplevel_window.geometry(f"{popup_width}x{popup_height}+{center_x}+{center_y}")
 
     def analyze_circuit(self): 
-        # ... (Permanece o mesmo da última versão, com a barra de progresso) ...
         self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self._clear_all_entry_error_styles()
         params,errors=self._validate_all_parameters(silent=False,check_detail_freq=True)
         if not params:
@@ -730,7 +705,7 @@ class ACCircuitAnalyzerApp:
         self.progress_bar.pack(pady=5,padx=0,fill="x"); self.progress_bar.start(); self.master.update_idletasks()
         output_text=""
         try:
-            frequencies,all_plot_data_y,f0_calc=self._calculate_sweep_data(params) # Corrigido para 3 retornos
+            frequencies,all_plot_data_y,f0_calc=self._calculate_sweep_data(params)
             extremum_info_for_plot=None
             if params['selected_magnitude_plots']:
                 first_mag_plot=params['selected_magnitude_plots'][0]
@@ -762,11 +737,12 @@ class ACCircuitAnalyzerApp:
                         if r_val_q>1e-12:
                             if l_val_q>1e-12 and omega_0>1e-9:q_factor_val=r_val_q/(omega_0*l_val_q)
                             elif c_val_q>1e-12 and omega_0>1e-9:q_factor_val=omega_0*c_val_q*r_val_q
-                        else:q_factor_val=float('inf') 
-                elif self.include_r_var.get() and r_val_q > 1e-12: 
-                     if self.include_l_var.get() and l_val_q > 1e-12 and not self.include_c_var.get() and freq_current > 1e-12: # ERRO: freq_current não definido aqui
+                        else:q_factor_val=0 # R=0 em paralelo, Q é baixo
+                elif self.include_r_var.get() and r_val_q > 1e-12 : 
+                     if self.include_l_var.get() and l_val_q > 1e-12 and not self.include_c_var.get(): # RL
+                          # Q para RL não é definido por f0 de RLC. Deixar N/A no contexto de ressonância RLC.
                           pass 
-                     elif self.include_c_var.get() and c_val_q > 1e-12 and not self.include_l_var.get() and freq_current > 1e-12: # ERRO: freq_current não definido aqui
+                     elif self.include_c_var.get() and c_val_q > 1e-12 and not self.include_l_var.get(): #RC
                           pass
                 if q_factor_val is not None:
                     if q_factor_val==float('inf'):q_factor_str,bandwidth_str="Infinito",self._format_value(0.0,"Hz")
@@ -792,7 +768,6 @@ class ACCircuitAnalyzerApp:
             self.results_text.configure(state="disabled")
 
     def _get_single_frequency_analysis_details(self, circuit_params, specific_freq):
-        # ... (Permanece o mesmo da última versão)
         output = ""
         try:
             include_r=self.include_r_var.get();include_l=self.include_l_var.get();include_c=self.include_c_var.get()
@@ -910,52 +885,73 @@ class ACCircuitAnalyzerApp:
             return f"  Erro ao calcular detalhes para {self._format_value(specific_freq,'Hz')} ({topology}): {e}\n"
 
     def _update_embedded_plot(self, frequencies, all_plot_data_y, params, f0_resonance=None, extremum_info_main=None):
-        # ... (Permanece o mesmo da última versão) ...
         if not (self.fig_embedded and self.ax_embedded and self.canvas_embedded): return 
         self.ax_embedded.clear()
         if hasattr(self,'ax2_embedded') and self.ax2_embedded and self.ax2_embedded.figure : self.ax2_embedded.clear(); self.ax2_embedded.set_visible(False)
         else: self.ax2_embedded = None 
+        
+        # Escala X automática
         use_log_x = False
         if len(frequencies) > 1 and frequencies[0] > 0 and frequencies[-1]/frequencies[0] > 100: use_log_x = True
         self.ax_embedded.set_xscale('log' if use_log_x else 'linear')
+
         lines_plotted = []; labels_plotted = []; color_index = 0; primary_y_log_needed = False
+        
+        # Determinar se o eixo Y primário precisa ser log
         if params['selected_magnitude_plots']:
             all_mag_data_flat = []
             for name in params['selected_magnitude_plots']:
-                if name in all_plot_data_y and all_plot_data_y[name]: all_mag_data_flat.extend(filter(lambda x: isinstance(x,(int,float)) and not math.isinf(x) and not math.isnan(x) and x > 1e-9, all_plot_data_y[name]))
+                if name in all_plot_data_y and all_plot_data_y[name]: 
+                    all_mag_data_flat.extend(filter(lambda x: isinstance(x,(int,float)) and not math.isinf(x) and not math.isnan(x) and x > 1e-9, all_plot_data_y[name]))
             if all_mag_data_flat:
                 min_val,max_val=min(all_mag_data_flat),max(all_mag_data_flat)
                 if min_val>0 and max_val/min_val>1000:primary_y_log_needed=True
+        
         self.ax_embedded.set_yscale('log' if primary_y_log_needed else 'linear')
-        first_line_color = None
+        first_line_color = self.plot_colors[0] # Cor padrão para o eixo Y primário
+
         for name in params['selected_magnitude_plots']:
             if name in all_plot_data_y and all_plot_data_y[name]:
-                current_color = self.plot_colors[color_index % len(self.plot_colors)]
-                if first_line_color is None: first_line_color = current_color
-                line, = self.ax_embedded.plot(frequencies, all_plot_data_y[name], marker='.', linestyle='-', markersize=2, color=current_color, label=name)
-                lines_plotted.append(line); labels_plotted.append(name); color_index += 1
-        self.ax_embedded.set_ylabel("Magnitude", fontsize=9, color=first_line_color if first_line_color else 'black')
-        self.ax_embedded.tick_params(axis='y', labelcolor=first_line_color if first_line_color else 'black')
+                current_data_series = np.array(all_plot_data_y[name])
+                valid_indices = ~np.isnan(current_data_series)
+                if np.any(valid_indices):
+                    current_color = self.plot_colors[color_index % len(self.plot_colors)]
+                    if color_index == 0: first_line_color = current_color # Cor da primeira curva de magnitude
+                    line, = self.ax_embedded.plot(frequencies[valid_indices], current_data_series[valid_indices], 
+                                                  marker='.', linestyle='-', markersize=2, color=current_color, label=name)
+                    lines_plotted.append(line); labels_plotted.append(name); color_index += 1
+        
+        self.ax_embedded.set_ylabel("Magnitude", fontsize=9, color=first_line_color)
+        self.ax_embedded.tick_params(axis='y', labelcolor=first_line_color)
+
         selected_phase_name = params['selected_phase_plot']
         if selected_phase_name != "Nenhuma" and selected_phase_name in all_plot_data_y and all_plot_data_y[selected_phase_name]:
-            if not self.ax2_embedded or not hasattr(self.ax2_embedded,'plot'): self.ax2_embedded = self.ax_embedded.twinx()
-            else: self.ax2_embedded.clear()
-            self.ax2_embedded.set_visible(True); phase_color=self.plot_colors[color_index % len(self.plot_colors)]
-            line_phase, = self.ax2_embedded.plot(frequencies,all_plot_data_y[selected_phase_name],marker='.',linestyle=':',markersize=2,color=phase_color,label=selected_phase_name)
-            self.ax2_embedded.set_ylabel(selected_phase_name,fontsize=9,color=phase_color); self.ax2_embedded.tick_params(axis='y',labelcolor=phase_color)
-            self.ax2_embedded.set_yscale('linear'); lines_plotted.append(line_phase); labels_plotted.append(selected_phase_name)
+            phase_data_series = np.array(all_plot_data_y[selected_phase_name])
+            valid_phase_indices = ~np.isnan(phase_data_series)
+            if np.any(valid_phase_indices):
+                if not self.ax2_embedded or not self.ax2_embedded.figure: self.ax2_embedded = self.ax_embedded.twinx()
+                else: self.ax2_embedded.clear()
+                self.ax2_embedded.set_visible(True); phase_color=self.plot_colors[color_index % len(self.plot_colors)]
+                line_phase, = self.ax2_embedded.plot(frequencies[valid_phase_indices], phase_data_series[valid_phase_indices],
+                                                     marker='.', linestyle=':', markersize=2,color=phase_color, label=selected_phase_name)
+                self.ax2_embedded.set_ylabel(selected_phase_name,fontsize=9,color=phase_color); self.ax2_embedded.tick_params(axis='y',labelcolor=phase_color)
+                self.ax2_embedded.set_yscale('linear'); lines_plotted.append(line_phase); labels_plotted.append(selected_phase_name)
+        
         title_parts = []
         if params['selected_magnitude_plots']: title_parts.extend(params['selected_magnitude_plots'])
         if params['selected_phase_plot'] != "Nenhuma": title_parts.append(params['selected_phase_plot'])
         plot_title = (", ".join(title_parts) if title_parts else "Resposta") + f" vs Frequência ({params['topology']})"
         self.ax_embedded.set_title(plot_title, fontsize=10); self.ax_embedded.set_xlabel("Frequência (Hz)", fontsize=9)
         self.ax_embedded.grid(True, which="both", linestyle="--", linewidth=0.5); self.ax_embedded.tick_params(axis='both', which='major', labelsize=8)
+
         if f0_resonance is not None and len(frequencies)>0 and frequencies[0]<=f0_resonance<=frequencies[-1]:
             line_f0 = self.ax_embedded.axvline(x=f0_resonance, color='dimgray', linestyle='-.', linewidth=1.2)
             if not any(l.get_label() == f'$f_0 \\approx$ {self._format_value(f0_resonance, "Hz")}' for l in lines_plotted if hasattr(l, 'get_label')):
                  lines_plotted.append(line_f0); labels_plotted.append(f'$f_0 \\approx$ {self._format_value(f0_resonance, "Hz")}')
-        if extremum_info_main and params['selected_magnitude_plots']:
+        
+        if extremum_info_main and params['selected_magnitude_plots']: # Somente se houver plots de magnitude
             etype, efreq, evalue_raw, evalue_formatted = extremum_info_main
+            # A anotação será para a primeira grandeza de magnitude selecionada
             first_mag_plot_name = params['selected_magnitude_plots'][0]
             text_label=f"{etype.capitalize()} ({first_mag_plot_name}):\n{evalue_formatted}\n@ {self._format_value(efreq, 'Hz')}"
             marker_color='darkgreen' if etype=='max' else 'indigo'
@@ -969,7 +965,9 @@ class ACCircuitAnalyzerApp:
             if text_y_pos>y_lim[1]*0.95 and etype=='max':text_y_pos=evalue_raw-offset_y*2.4;va_align='top'
             if text_y_pos<y_lim[0]+0.05*y_range_plot and etype=='min':text_y_pos=evalue_raw+offset_y;va_align='bottom'
             self.ax_embedded.annotate(text_label,xy=(efreq,evalue_raw),xytext=(efreq,text_y_pos),arrowprops=dict(arrowstyle="-",connectionstyle="arc3,rad=0.1",color='gray',lw=0.7),fontsize=6,ha=ha_align,va=va_align,bbox=dict(boxstyle="round,pad=0.2",fc="whitesmoke",ec="lightgray",alpha=0.7))
+        
         if lines_plotted: self.ax_embedded.legend(lines_plotted, labels_plotted, loc='best', fontsize='xx-small')
+        
         try: self.fig_embedded.tight_layout(pad=0.5)
         except Exception: 
             try: self.fig_embedded.subplots_adjust(left=0.12, bottom=0.15, right=0.88 if self.ax2_embedded and self.ax2_embedded.get_visible() else 0.95, top=0.92)
