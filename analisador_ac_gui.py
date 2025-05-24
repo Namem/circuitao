@@ -12,19 +12,24 @@ class ACCircuitAnalyzerApp:
     def __init__(self, master_window):
         self.master = master_window
         master_window.title("Analisador de Circuito CA Série RLC (CustomTkinter)")
-        master_window.geometry("800x1000") # Aumentado para o gráfico
+        # Geometria ajustada, pois o gráfico será popup
+        master_window.geometry("780x720") 
 
-        ctk.set_appearance_mode("System")  # Pode ser "System", "Light", "Dark"
-        ctk.set_default_color_theme("blue")  # Temas: "blue", "green", "dark-blue"
+        ctk.set_appearance_mode("System")
+        ctk.set_default_color_theme("blue")
 
-        self.angle_unit = tk.StringVar(value="degrees") # tk.StringVar ainda é usado
+        self.angle_unit = tk.StringVar(value="degrees")
 
-        self.sweep_enabled_var = tk.BooleanVar(value=False) # Para o CTkSwitch
+        self.sweep_enabled_var = tk.BooleanVar(value=False)
         self.plot_variable_options = ["|Z_total|", "|I_total|", "|V_R|", "|V_L|", "|V_C|",
                                       "Fase(Z_total) (°)", "Fase(I_total) (°)",
                                       "Fase(V_R) (°)", "Fase(V_L) (°)", "Fase(V_C) (°)"]
         self.plot_variable_selected = tk.StringVar(value=self.plot_variable_options[0])
 
+        # Atributos para a janela de plot popup
+        self.plot_popup_window = None 
+        # Não precisamos mais de self.fig, self.ax, self.canvas como atributos da classe principal
+        # para o gráfico incorporado.
 
         # Frame principal
         main_frame = ctk.CTkFrame(master_window, corner_radius=10)
@@ -33,47 +38,37 @@ class ACCircuitAnalyzerApp:
         # Título dentro da janela
         title_label = ctk.CTkLabel(main_frame, text="Análise de Circuito CA Série RLC",
                                    font=ctk.CTkFont(size=20, weight="bold"))
-        title_label.pack(pady=(10, 20)) # Reduzi um pouco o pady inferior
+        title_label.pack(pady=(10, 20))
 
         # --- Seção de Entradas ---
         input_section_label = ctk.CTkLabel(main_frame, text="Parâmetros do Circuito e da Fonte",
                                            font=ctk.CTkFont(size=16, weight="bold"))
         input_section_label.pack(pady=(0,5), anchor="w", padx=10)
-
         input_frame = ctk.CTkFrame(main_frame, corner_radius=10)
         input_frame.pack(fill="x", padx=10, pady=(0,10))
         input_frame.grid_columnconfigure(1, weight=1)
-
-        # Componentes
-        entry_width = 200 # Largura padrão para entradas CTk
-        
+        entry_width = 200
         ctk.CTkLabel(input_frame, text="Resistor (R) [Ω]:").grid(row=0, column=0, padx=10, pady=8, sticky="w")
         self.r_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Ex: 100")
         self.r_entry.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
         self.r_entry.insert(0, "100")
-
         ctk.CTkLabel(input_frame, text="Indutor (L) [H]:").grid(row=1, column=0, padx=10, pady=8, sticky="w")
         self.l_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Ex: 0.1")
         self.l_entry.grid(row=1, column=1, padx=10, pady=8, sticky="ew")
         self.l_entry.insert(0, "0.1")
-
         ctk.CTkLabel(input_frame, text="Capacitor (C) [F]:").grid(row=2, column=0, padx=10, pady=8, sticky="w")
         self.c_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Ex: 0.00001")
         self.c_entry.grid(row=2, column=1, padx=10, pady=8, sticky="ew")
         self.c_entry.insert(0, "0.00001")
-
-        # Fonte de Tensão CA
         ctk.CTkLabel(input_frame, text="Tensão Fonte (Vmag) [V]:").grid(row=3, column=0, padx=10, pady=8, sticky="w")
         self.v_mag_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Ex: 10")
         self.v_mag_entry.grid(row=3, column=1, padx=10, pady=8, sticky="ew")
         self.v_mag_entry.insert(0, "10")
-
         ctk.CTkLabel(input_frame, text="Fase Fonte (θv) [°]:").grid(row=4, column=0, padx=10, pady=8, sticky="w")
         self.v_phase_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Ex: 0")
         self.v_phase_entry.grid(row=4, column=1, padx=10, pady=8, sticky="ew")
         self.v_phase_entry.insert(0, "0")
-
-        ctk.CTkLabel(input_frame, text="Frequência Única (f) [Hz]:").grid(row=5, column=0, padx=10, pady=8, sticky="w") # Label alterada
+        ctk.CTkLabel(input_frame, text="Frequência Única (f) [Hz]:").grid(row=5, column=0, padx=10, pady=8, sticky="w")
         self.freq_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Ex: 60")
         self.freq_entry.grid(row=5, column=1, padx=10, pady=8, sticky="ew")
         self.freq_entry.insert(0, "60")
@@ -82,15 +77,11 @@ class ACCircuitAnalyzerApp:
         output_options_label = ctk.CTkLabel(main_frame, text="Opções de Saída",
                                             font=ctk.CTkFont(size=16, weight="bold"))
         output_options_label.pack(pady=(10,5), anchor="w", padx=10)
-        
         output_options_frame = ctk.CTkFrame(main_frame, corner_radius=10)
         output_options_frame.pack(fill="x", padx=10, pady=(0,10))
-
-        ctk.CTkLabel(output_options_frame, text="Unidade do Ângulo (Saída):").pack(side="left", padx=(10,5), pady=10) # Label alterada
-        
+        ctk.CTkLabel(output_options_frame, text="Unidade do Ângulo (Saída):").pack(side="left", padx=(10,5), pady=10)
         degrees_radio = ctk.CTkRadioButton(output_options_frame, text="Graus (°)", variable=self.angle_unit, value="degrees")
         degrees_radio.pack(side="left", padx=5, pady=10)
-        
         radians_radio = ctk.CTkRadioButton(output_options_frame, text="Radianos (rad)", variable=self.angle_unit, value="radians")
         radians_radio.pack(side="left", padx=5, pady=10)
 
@@ -98,89 +89,59 @@ class ACCircuitAnalyzerApp:
         sweep_section_label = ctk.CTkLabel(main_frame, text="Configurações da Varredura de Frequência",
                                            font=ctk.CTkFont(size=16, weight="bold"))
         sweep_section_label.pack(pady=(15,5), anchor="w", padx=10)
-
         sweep_frame = ctk.CTkFrame(main_frame, corner_radius=10)
         sweep_frame.pack(fill="x", padx=10, pady=(0,10))
-        sweep_frame.grid_columnconfigure(1, weight=1) 
-        sweep_frame.grid_columnconfigure(3, weight=1) 
-
+        sweep_frame.grid_columnconfigure(1, weight=1)
+        sweep_frame.grid_columnconfigure(3, weight=1)
         self.sweep_switch = ctk.CTkSwitch(sweep_frame, text="Habilitar Varredura", variable=self.sweep_enabled_var,
                                           command=self.toggle_sweep_entries_state)
         self.sweep_switch.grid(row=0, column=0, columnspan=4, padx=10, pady=10, sticky="w")
-
         ctk.CTkLabel(sweep_frame, text="Frequência Inicial (Hz):").grid(row=1, column=0, padx=10, pady=8, sticky="w")
         self.freq_start_entry = ctk.CTkEntry(sweep_frame, placeholder_text="Ex: 1")
         self.freq_start_entry.grid(row=1, column=1, padx=10, pady=8, sticky="ew")
         self.freq_start_entry.insert(0, "1")
-
         ctk.CTkLabel(sweep_frame, text="Frequência Final (Hz):").grid(row=1, column=2, padx=10, pady=8, sticky="w")
         self.freq_end_entry = ctk.CTkEntry(sweep_frame, placeholder_text="Ex: 1000")
         self.freq_end_entry.grid(row=1, column=3, padx=10, pady=8, sticky="ew")
         self.freq_end_entry.insert(0, "1000")
-
         ctk.CTkLabel(sweep_frame, text="Número de Pontos:").grid(row=2, column=0, padx=10, pady=8, sticky="w")
         self.num_points_entry = ctk.CTkEntry(sweep_frame, placeholder_text="Ex: 200")
         self.num_points_entry.grid(row=2, column=1, padx=10, pady=8, sticky="ew")
         self.num_points_entry.insert(0, "200")
-        
         ctk.CTkLabel(sweep_frame, text="Plotar Grandeza:").grid(row=2, column=2, padx=10, pady=8, sticky="w")
         self.plot_variable_combobox = ctk.CTkComboBox(sweep_frame, values=self.plot_variable_options,
                                                       variable=self.plot_variable_selected, state="readonly")
         self.plot_variable_combobox.grid(row=2, column=3, padx=10, pady=8, sticky="ew")
 
-
         # Frame para os botões de ação
-        action_buttons_frame = ctk.CTkFrame(main_frame, fg_color="transparent") 
-        action_buttons_frame.pack(pady=15) # Reduzi o pady
-
+        action_buttons_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        action_buttons_frame.pack(pady=15)
         analyze_button = ctk.CTkButton(action_buttons_frame, text="Analisar Circuito", command=self.analyze_circuit, font=ctk.CTkFont(size=14, weight="bold"))
         analyze_button.pack(side="left", padx=10)
-
         clear_button = ctk.CTkButton(action_buttons_frame, text="Limpar Entradas", command=self.clear_entries, fg_color="gray50", hover_color="gray30")
         clear_button.pack(side="left", padx=10)
-
         about_button = ctk.CTkButton(action_buttons_frame, text="Sobre", command=self.show_about_dialog_ctk, width=80)
         about_button.pack(side="left", padx=10)
 
-        # --- Frame para o Gráfico Matplotlib ---
-        plot_frame_label = ctk.CTkLabel(main_frame, text="Gráfico da Varredura",
-                                        font=ctk.CTkFont(size=16, weight="bold"))
-        plot_frame_label.pack(pady=(10,5), anchor="w", padx=10)
-        
-        self.plot_frame = ctk.CTkFrame(main_frame, corner_radius=10)
-        # Definindo uma altura mínima para o frame do gráfico e permitindo que expanda
-        self.plot_frame.pack(fill="both", expand=True, padx=10, pady=(0,10), ipady=100) # ipady para altura mínima
-        
-        self.fig = Figure(figsize=(5, 3.5), dpi=100) 
-        self.ax = self.fig.add_subplot(111)
-        # clear_plot é chamado no final do __init__ através de toggle_sweep_entries_state
-        
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
-        self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.pack(side="top", fill="both", expand=True, padx=5, pady=5)
-        # self.canvas.draw() # Será desenhado pelo clear_plot
-
         # --- Seção de Saídas em Texto ---
+        # REMOVIDO: plot_frame_label e self.plot_frame para o gráfico incorporado
+        # REMOVIDO: self.fig, self.ax, self.canvas, self.canvas_widget para o gráfico incorporado
+
         results_section_label_text = ctk.CTkLabel(main_frame, text="Resultados da Análise (Texto)",
                                              font=ctk.CTkFont(size=16, weight="bold"))
-        results_section_label_text.pack(pady=(10,5), anchor="w", padx=10)
-
-        self.results_text = ctk.CTkTextbox(main_frame, height=150, corner_radius=10, wrap="word", 
+        results_section_label_text.pack(pady=(20,5), anchor="w", padx=10) # Aumentei pady superior
+        self.results_text = ctk.CTkTextbox(main_frame, height=250, corner_radius=10, wrap="word", # Aumentei a altura
                                            font=ctk.CTkFont(family="monospace", size=13))
-        self.results_text.pack(fill="x", padx=10, pady=(0,10)) # fill="x" para não expandir verticalmente mais que o necessário
+        self.results_text.pack(fill="x", expand=True, padx=10, pady=(0,10)) # Adicionado expand=True
         self.results_text.configure(state="disabled")
 
         note_label = ctk.CTkLabel(main_frame, text="Nota: Esta ferramenta analisa um circuito RLC série fixo.",
                                   font=ctk.CTkFont(size=12), text_color="gray50")
-        note_label.pack(pady=(10,10), side="bottom") # side="bottom" para fixar na parte inferior
+        note_label.pack(pady=(10,10), side="bottom")
 
-        self.toggle_sweep_entries_state() # Define o estado inicial dos campos de varredura e limpa o plot
+        self.toggle_sweep_entries_state()
 
     def toggle_sweep_entries_state(self):
-        """
-        Habilita ou desabilita os campos de entrada da varredura de frequência
-        com base no estado do CTkSwitch.
-        """
         if self.sweep_enabled_var.get():
             sweep_state = "normal"
             single_freq_state = "disabled"
@@ -188,12 +149,11 @@ class ACCircuitAnalyzerApp:
             self.results_text.delete("1.0", "end")
             self.results_text.insert("1.0", "Modo de varredura habilitado. Configure e clique em Analisar.")
             self.results_text.configure(state="disabled")
-
         else:
             sweep_state = "disabled"
             single_freq_state = "normal"
             self.results_text.configure(state="normal")
-            self.results_text.delete("1.0", "end") # Limpa o texto ao desabilitar varredura
+            self.results_text.delete("1.0", "end")
             self.results_text.configure(state="disabled")
         
         self.freq_entry.configure(state=single_freq_state)
@@ -201,17 +161,12 @@ class ACCircuitAnalyzerApp:
         self.freq_end_entry.configure(state=sweep_state)
         self.num_points_entry.configure(state=sweep_state)
         self.plot_variable_combobox.configure(state=sweep_state)
-        self.clear_plot() # Limpa o gráfico ao alternar o modo
+        self.clear_plot_popup() # Fecha a janela de plot se estiver aberta
 
-    def clear_plot(self):
-        if hasattr(self, 'ax'): # Verifica se o eixo do gráfico já existe
-            self.ax.clear()
-            self.ax.set_title("Aguardando Análise")
-            self.ax.set_xlabel("Frequência (Hz)")
-            self.ax.set_ylabel("Grandeza")
-            self.ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-            if hasattr(self, 'fig'): self.fig.tight_layout() # Evita sobreposição de labels
-            if hasattr(self, 'canvas'): self.canvas.draw()
+    def clear_plot_popup(self):
+        if self.plot_popup_window and self.plot_popup_window.winfo_exists():
+            self.plot_popup_window.destroy()
+        self.plot_popup_window = None
             
     def clear_entries(self):
         self.r_entry.delete(0, "end"); self.r_entry.insert(0, "100")
@@ -219,91 +174,65 @@ class ACCircuitAnalyzerApp:
         self.c_entry.delete(0, "end"); self.c_entry.insert(0, "0.00001")
         self.v_mag_entry.delete(0, "end"); self.v_mag_entry.insert(0, "10")
         self.v_phase_entry.delete(0, "end"); self.v_phase_entry.insert(0, "0")
-        
         self.freq_entry.delete(0, "end"); self.freq_entry.insert(0, "60")
-        
         self.freq_start_entry.delete(0, "end"); self.freq_start_entry.insert(0, "1")
         self.freq_end_entry.delete(0, "end"); self.freq_end_entry.insert(0, "1000")
         self.num_points_entry.delete(0, "end"); self.num_points_entry.insert(0, "200")
         self.plot_variable_combobox.set(self.plot_variable_options[0])
-
-        # self.sweep_enabled_var.set(False) # Opcional: desabilitar varredura ao limpar
-        # self.toggle_sweep_entries_state() # Atualiza o estado dos campos se desabilitar
-
         self.results_text.configure(state="normal")
         self.results_text.delete("1.0", "end")
         self.results_text.configure(state="disabled")
-        self.clear_plot()
+        self.clear_plot_popup()
     
     def show_about_dialog_ctk(self):
-        if hasattr(self, "about_window") and self.about_window.winfo_exists():
-            self.about_window.lift() 
-            self.about_window.focus_set() 
+        if hasattr(self, "about_dialog_window") and self.about_dialog_window.winfo_exists():
+            self.about_dialog_window.lift() 
+            self.about_dialog_window.focus_set() 
             return
 
-        self.about_window = ctk.CTkToplevel(self.master)
-        self.about_window.title("Sobre Analisador de Circuito CA")
-        self.about_window.geometry("450x300") 
-        self.about_window.transient(self.master) 
-        
-        self.about_window.update_idletasks() 
+        self.about_dialog_window = ctk.CTkToplevel(self.master)
+        self.about_dialog_window.title("Sobre Analisador de Circuito CA")
+        self.about_dialog_window.geometry("450x300") 
+        self.about_dialog_window.transient(self.master) 
+        self.about_dialog_window.update_idletasks() 
+        try: self.about_dialog_window.grab_set() 
+        except tk.TclError: self.about_dialog_window.after(100, self.about_dialog_window.grab_set)
 
-        try: 
-            self.about_window.grab_set() 
-        except tk.TclError as e: 
-            print(f"Aviso: Falha ao executar grab_set imediatamente: {e}. Tentando com atraso.")
-            self.about_window.after(100, self.about_window.grab_set)
-
-        about_frame = ctk.CTkFrame(self.about_window, corner_radius=10)
+        about_frame = ctk.CTkFrame(self.about_dialog_window, corner_radius=10)
         about_frame.pack(expand=True, fill="both", padx=15, pady=15)
-
         ctk.CTkLabel(about_frame, text="Analisador de Circuito CA Série RLC", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(10,10))
-        
-        info_text = ("Versão: 1.2.0 (CustomTkinter)\n\n" # Atualizei a versão
+        info_text = ("Versão: 1.3.0 (CustomTkinter)\n\n" 
                      "Desenvolvido como exemplo de aplicação.\n\n"
                      "Funcionalidades:\n"
                      "- Análise de circuito RLC série em CA (freq. única e varredura).\n"
                      "- Cálculo de impedâncias, correntes, tensões e potências.\n"
-                     "- Plotagem de grandezas vs. frequência.") 
+                     "- Plotagem de grandezas vs. frequência em janela popup.") 
         ctk.CTkLabel(about_frame, text=info_text, justify="left", wraplength=380).pack(pady=10)
-
-        close_button = ctk.CTkButton(about_frame, text="Fechar", command=self.about_window.destroy, width=100)
+        close_button = ctk.CTkButton(about_frame, text="Fechar", command=self.about_dialog_window.destroy, width=100)
         close_button.pack(pady=20)
         
-        # Centralizar
         self.master.update_idletasks()
-        master_x = self.master.winfo_x()
-        master_y = self.master.winfo_y()
-        master_width = self.master.winfo_width()
-        master_height = self.master.winfo_height()
-
-        self.about_window.update_idletasks()
-        popup_width = self.about_window.winfo_width()
-        popup_height = self.about_window.winfo_height()
-        
-        if popup_width <= 1 or popup_height <= 1: # Fallback se as dimensões não estiverem prontas
+        master_x, master_y = self.master.winfo_x(), self.master.winfo_y()
+        master_width, master_height = self.master.winfo_width(), self.master.winfo_height()
+        self.about_dialog_window.update_idletasks()
+        popup_width, popup_height = self.about_dialog_window.winfo_width(), self.about_dialog_window.winfo_height()
+        if popup_width <= 1 or popup_height <= 1: 
             try:
-                geom_parts = self.about_window.geometry().split('+')[0].split('x')
+                geom_parts = self.about_dialog_window.geometry().split('+')[0].split('x')
                 popup_width, popup_height = int(geom_parts[0]), int(geom_parts[1])
-            except: # Fallback se a geometria não puder ser parseada
-                 popup_width = 450 
-                 popup_height = 300
-
+            except: popup_width, popup_height = 450, 300
         center_x = master_x + (master_width - popup_width) // 2
         center_y = master_y + (master_height - popup_height) // 2
-        
-        self.about_window.geometry(f"{popup_width}x{popup_height}+{center_x}+{center_y}")
-        self.about_window.focus_set() 
+        self.about_dialog_window.geometry(f"{popup_width}x{popup_height}+{center_x}+{center_y}")
+        self.about_dialog_window.focus_set() 
 
     def analyze_circuit(self):
         self.results_text.configure(state="normal")
         self.results_text.delete("1.0", "end") 
-
         if self.sweep_enabled_var.get():
             self.perform_frequency_sweep()
         else:
             self.perform_single_frequency_analysis()
-        
         self.results_text.configure(state="disabled")
 
     def perform_single_frequency_analysis(self):
@@ -378,15 +307,15 @@ class ACCircuitAnalyzerApp:
                 output += f"  Soma Fasorial (V_R+V_L+V_C): {self.format_phasor(v_sum_phasor, 'V')}\n"
                 output += f"  (Deveria ser igual à Tensão da Fonte: {self.format_phasor(v_source_phasor, 'V')})\n"
             self.results_text.insert("1.0", output)
-            self.clear_plot()
+            self.clear_plot_popup() # Fecha a janela de plot se estiver aberta
         except ValueError:
             messagebox.showerror("Erro de Entrada", "Valores numéricos inválidos (Freq. Única).")
             self.results_text.insert("1.0", "Erro na entrada para análise de frequência única.")
         except Exception as e:
             messagebox.showerror("Erro Inesperado", f"Erro (Freq. Única): {str(e)}")
             self.results_text.insert("1.0", f"Erro inesperado: {str(e)}")
-            import traceback # Para debug
-            traceback.print_exc() # Para debug
+            import traceback 
+            traceback.print_exc() 
 
     def perform_frequency_sweep(self):
         output_summary = "--- Varredura de Frequência ---\n"
@@ -395,8 +324,6 @@ class ACCircuitAnalyzerApp:
             freq_end = float(self.freq_end_entry.get())
             num_points = int(self.num_points_entry.get())
             plot_choice = self.plot_variable_selected.get()
-            
-            # Parâmetros do circuito
             r_val = float(self.r_entry.get()); l_val = float(self.l_entry.get()); c_val = float(self.c_entry.get())
             v_mag = float(self.v_mag_entry.get()); v_phase_deg = float(self.v_phase_entry.get())
             v_phase_rad = math.radians(v_phase_deg)
@@ -423,19 +350,13 @@ class ACCircuitAnalyzerApp:
             for freq_current in frequencies:
                 z_r_sweep = complex(r_val, 0)
                 z_l_sweep = complex(0, 2 * cmath.pi * freq_current * l_val) if l_val > 0 else complex(0,0)
-                # Evitar divisão por zero se freq_current for zero (embora já validado > 0)
-                # ou se c_val for zero (já tratado para ser infinito)
                 if c_val > 0 and freq_current > 0 :
                      z_c_sweep = complex(0, -1 / (2 * cmath.pi * freq_current * c_val))
-                else: # c_val = 0 ou freq_current = 0 (para o capacitor)
+                else: 
                      z_c_sweep = complex(float('inf'), 0)
-
                 z_total_sweep = z_r_sweep + z_l_sweep + z_c_sweep
                 current_value_to_plot = 0.0 
-
                 i_total_sweep = v_source_phasor_fixed / z_total_sweep if abs(z_total_sweep) != float('inf') else complex(0,0)
-                
-                # Dicionário para mapear a escolha do ComboBox para a função lambda que calcula o valor
                 val_map = {
                     "|Z_total|": lambda f, i, vr, vl, vc, zr, zl, zc, zt, vs: abs(zt),
                     "|I_total|": lambda f, i, vr, vl, vc, zr, zl, zc, zt, vs: abs(i),
@@ -450,16 +371,14 @@ class ACCircuitAnalyzerApp:
                                                                                       if abs(vs if abs(zc) == float('inf') else i * zc) > 1e-12 else 0.0
                 }
                 if plot_choice in val_map:
-                    # Passando os valores relevantes para a função lambda
                     current_value_to_plot = val_map[plot_choice](freq_current, i_total_sweep, 
-                                                                 i_total_sweep * z_r_sweep, 
-                                                                 i_total_sweep * z_l_sweep, 
+                                                                 i_total_sweep * z_r_sweep, i_total_sweep * z_l_sweep, 
                                                                  v_source_phasor_fixed if abs(z_c_sweep) == float('inf') else i_total_sweep * z_c_sweep,
                                                                  z_r_sweep, z_l_sweep, z_c_sweep, z_total_sweep, v_source_phasor_fixed)
                 plot_data_y.append(current_value_to_plot)
             
-            self.plot_sweep_results(frequencies, plot_data_y, plot_choice)
-            output_summary += "Varredura concluída. Veja o gráfico.\n"
+            self.display_plot_in_popup(frequencies, plot_data_y, plot_choice) # CHAMADA MODIFICADA
+            output_summary += "Varredura concluída. Gráfico exibido em nova janela.\n"
             self.results_text.insert("1.0", output_summary)
 
         except ValueError:
@@ -471,50 +390,66 @@ class ACCircuitAnalyzerApp:
             import traceback
             traceback.print_exc()
 
-    def plot_sweep_results(self, frequencies, plot_data_y, y_label_choice):
-        self.ax.clear()
-        self.ax.plot(frequencies, plot_data_y, marker='.', linestyle='-', markersize=3) # Marcadores menores
-        self.ax.set_title(f"{y_label_choice} vs Frequência")
-        self.ax.set_xlabel("Frequência (Hz)")
-        self.ax.set_ylabel(y_label_choice)
-        self.ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+    def display_plot_in_popup(self, frequencies, plot_data_y, y_label_choice):
+        # Se uma janela de plot já existe, fecha-a para abrir uma nova.
+        if self.plot_popup_window and self.plot_popup_window.winfo_exists():
+            self.plot_popup_window.destroy()
+
+        self.plot_popup_window = ctk.CTkToplevel(self.master)
+        self.plot_popup_window.title(f"Gráfico: {y_label_choice} vs Frequência")
+        self.plot_popup_window.geometry("700x550") 
+        self.plot_popup_window.transient(self.master)
+        # self.plot_popup_window.grab_set() # Opcional: tornar modal
+
+        popup_plot_frame = ctk.CTkFrame(self.plot_popup_window)
+        popup_plot_frame.pack(expand=True, fill="both", padx=10, pady=10)
+
+        fig_popup = Figure(figsize=(6, 4.5), dpi=100) 
+        ax_popup = fig_popup.add_subplot(111)
+
+        ax_popup.plot(frequencies, plot_data_y, marker='.', linestyle='-', markersize=3)
+        ax_popup.set_title(f"{y_label_choice} vs Frequência")
+        ax_popup.set_xlabel("Frequência (Hz)")
+        ax_popup.set_ylabel(y_label_choice)
+        ax_popup.grid(True, which="both", linestyle="--", linewidth=0.5)
         
         if len(frequencies) > 1 and frequencies[-1] / frequencies[0] > 50: 
-             self.ax.set_xscale('log')
+             ax_popup.set_xscale('log')
         else:
-             self.ax.set_xscale('linear')
+             ax_popup.set_xscale('linear')
         
         is_magnitude_plot = "|" in y_label_choice
-        is_phase_plot = "Fase" in y_label_choice
-
         if is_magnitude_plot and len(plot_data_y) > 1:
-            # Filtrar zeros e infinitos para min_val para evitar erros com log scale
             positive_values = [d for d in plot_data_y if d > 1e-9 and d != float('inf')]
             if positive_values:
                 min_val = min(positive_values) 
-                max_val = max(d for d in plot_data_y if d != float('inf')) # Max desconsiderando inf
+                max_val = max(d for d in plot_data_y if d != float('inf')) 
                 if min_val > 0 and max_val / min_val > 1000: 
-                    self.ax.set_yscale('log')
+                    ax_popup.set_yscale('log')
                 else:
-                    self.ax.set_yscale('linear')
-            else: # Todos os valores são zero ou negativos
-                self.ax.set_yscale('linear')
-        elif not is_phase_plot : # Se não for magnitude nem fase, mas algo que pode variar muito
-             self.ax.set_yscale('linear') # Default para outros casos, ou lógica específica
+                    ax_popup.set_yscale('linear')
+            else: 
+                ax_popup.set_yscale('linear')
+        elif "Fase" not in y_label_choice : 
+             ax_popup.set_yscale('linear') 
 
-        self.fig.tight_layout()
-        self.canvas.draw()
+        fig_popup.tight_layout()
+        
+        canvas_popup = FigureCanvasTkAgg(fig_popup, master=popup_plot_frame)
+        canvas_popup_widget = canvas_popup.get_tk_widget()
+        canvas_popup_widget.pack(side="top", fill="both", expand=True)
+        canvas_popup.draw()
+
+        self.plot_popup_window.focus_set()
+        self.plot_popup_window.lift()
+
 
     def format_phasor(self, complex_val, unit=""):
         if abs(complex_val) == float('inf'):
             return f"Infinito {unit}"
         mag = abs(complex_val)
         phase_rad = cmath.phase(complex_val)
-        
-        # Evitar fase de um número complexo muito próximo de zero (ex: 0+0j)
-        if mag < 1e-12: # Tolerância para considerar como zero
-            phase_rad = 0.0
-
+        if mag < 1e-12: phase_rad = 0.0
         if self.angle_unit.get() == "degrees":
             phase_display = math.degrees(phase_rad)
             angle_symbol = "°"
