@@ -8,7 +8,7 @@ import json
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-import matplotlib.colors as mcolors # Para cores do gráfico
+import matplotlib.colors as mcolors
 
 class ACCircuitAnalyzerApp:
     def __init__(self, master_window):
@@ -21,9 +21,8 @@ class ACCircuitAnalyzerApp:
 
         self.angle_unit = tk.StringVar(value="degrees")
         
-        # Variáveis para seleção de múltiplas curvas de MAGNITUDE
         self.magnitude_plot_vars = {
-            "|Z_total|": tk.BooleanVar(value=True), # Plotar Z_total por padrão
+            "|Z_total|": tk.BooleanVar(value=True),
             "|I_total|": tk.BooleanVar(value=False),
             "|V_R|": tk.BooleanVar(value=False),
             "|V_L|": tk.BooleanVar(value=False),
@@ -31,7 +30,6 @@ class ACCircuitAnalyzerApp:
         }
         self.plot_colors = list(mcolors.TABLEAU_COLORS.values()) + ['#FF00FF', '#A52A2A', '#00FFFF', '#FFD700', '#808080', '#008000', '#800080', '#FFC0CB']
 
-        # Variável para seleção de UMA curva de FASE
         self.phase_plot_options = ["Nenhuma", "Fase(Z_total) (°)", "Fase(I_total) (°)", 
                                    "Fase(V_R) (°)", "Fase(V_L) (°)", "Fase(V_C) (°)"]
         self.selected_phase_plot_var = tk.StringVar(value=self.phase_plot_options[0])
@@ -40,7 +38,6 @@ class ACCircuitAnalyzerApp:
         self.decimal_places_var = tk.StringVar(value="3") 
         self.scientific_notation_var = tk.BooleanVar(value=False)
 
-        # Checkboxes para incluir componentes
         self.include_r_var = tk.BooleanVar(value=True)
         self.include_l_var = tk.BooleanVar(value=True)
         self.include_c_var = tk.BooleanVar(value=True)
@@ -101,12 +98,13 @@ class ACCircuitAnalyzerApp:
         input_section_label.pack(pady=(10,5), anchor="w", padx=10)
         input_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
         input_frame.pack(fill="x", padx=10, pady=(0,10))
-        input_frame.grid_columnconfigure(2, weight=1) 
+        input_frame.grid_columnconfigure(1, weight=0) # Checkbox column
+        input_frame.grid_columnconfigure(2, weight=1) # Entry column
         entry_width = 130 
         
         self.r_check = ctk.CTkCheckBox(input_frame, text="R [Ω]:", variable=self.include_r_var, command=self._on_include_component_change)
-        self.r_check.grid(row=0, column=0, columnspan=2, padx=(10,0), pady=8, sticky="w")
-        self.r_entry = ctk.CTkEntry(input_frame, width=entry_width)
+        self.r_check.grid(row=0, column=0, columnspan=2, padx=(10,0), pady=8, sticky="w") # Colspan 2 for label
+        self.r_entry = ctk.CTkEntry(input_frame, width=entry_width) 
         self.r_entry.grid(row=0, column=2, padx=(0,10), pady=8, sticky="ew"); self.r_entry.insert(0, "10")
         self.r_entry.bind("<FocusOut>", self._on_parameter_change); self.r_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['r_val'] = self.r_entry
@@ -124,7 +122,7 @@ class ACCircuitAnalyzerApp:
         self.c_entry.grid(row=2, column=2, padx=(0,10), pady=8, sticky="ew"); self.c_entry.insert(0, "0.00001")
         self.c_entry.bind("<FocusOut>", self._on_parameter_change); self.c_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['c_val'] = self.c_entry
-        
+                
         ctk.CTkLabel(input_frame, text="Tensão Fonte (Vmag) [V]:").grid(row=3, column=0, columnspan=2, padx=10, pady=8, sticky="w")
         self.v_mag_entry = ctk.CTkEntry(input_frame, width=entry_width)
         self.v_mag_entry.grid(row=3, column=2, padx=(0,10), pady=8, sticky="ew"); self.v_mag_entry.insert(0, "10")
@@ -217,6 +215,7 @@ class ACCircuitAnalyzerApp:
                                                     width=180)
         self.phase_plot_combobox.pack(side="left", padx=5, pady=5, expand=True, fill="x")
 
+
         action_buttons_frame = ctk.CTkFrame(left_panel_scroll_frame, fg_color="transparent")
         action_buttons_frame.pack(pady=20, fill="x")
         analyze_button = ctk.CTkButton(action_buttons_frame, text="Analisar e Plotar", command=self.analyze_circuit)
@@ -268,15 +267,6 @@ class ACCircuitAnalyzerApp:
         self.master.after(10, self._on_include_component_change) 
         self.master.after(50, self._trigger_realtime_plot_update) 
 
-    # ... (RESTANTE DOS MÉTODOS COMO NA VERSÃO ANTERIOR, COM AS CORREÇÕES JÁ APLICADAS) ...
-    # Os métodos _validate_all_parameters, _calculate_sweep_data, _trigger_realtime_plot_update,
-    # _find_extremum, _update_embedded_plot, _get_single_frequency_analysis_details
-    # JÁ ESTÃO ADAPTADOS PARA MÚLTIPLAS CURVAS E COMPONENTES OPCIONAIS
-    # E A LÓGICA DE Q, BW, POTÊNCIAS POR COMPONENTE JÁ FOI REVISADA.
-    # O CÓDIGO DA SUA ÚLTIMA VERSÃO (QUE CAUSOU O AttributeError) É A BASE.
-    # A CORREÇÃO PRINCIPAL É GARANTIR QUE _trigger_realtime_plot_update não seja chamado
-    # por _on_include_component_change ANTES de todos os widgets de varredura existirem.
-    
     def _on_parameter_change(self, event=None, from_combobox_value=None): # Renomeado e unificado
         self._trigger_realtime_plot_update(from_combobox_value=from_combobox_value)
 
@@ -284,10 +274,10 @@ class ACCircuitAnalyzerApp:
         # Se houver resultados textuais, reanalisa para atualizar a formatação
         if self.results_text.get("1.0", "end-1c").strip(): # Verifica se há texto
              self.analyze_circuit() # Força reanálise completa para atualizar o texto
-
+            
     def _on_include_component_change(self, event=None): # event=None para compatibilidade
         self.r_entry.configure(state="normal" if self.include_r_var.get() else "disabled")
-        if not self.include_r_var.get() and self.r_entry.get() != "0": # Zera apenas se não for já zero
+        if not self.include_r_var.get() and self.r_entry.get() != "0": 
             self.r_entry.delete(0,tk.END); self.r_entry.insert(0,"0")
         
         self.l_entry.configure(state="normal" if self.include_l_var.get() else "disabled")
@@ -392,8 +382,10 @@ class ACCircuitAnalyzerApp:
 
     def _validate_all_parameters(self, silent=True, check_detail_freq=False):
         self._clear_all_entry_error_styles(); params={}; error_messages=[]; error_fields=[]
-        def gf(ew,pn,hn,include_var):
-            if include_var is not None and not include_var.get(): params[pn]=0.0; return 0.0 
+        def gf(ew,pn,hn,include_var): # include_var é opcional e um BooleanVar
+            if include_var is not None and not include_var.get(): 
+                params[pn]=0.0 # Define como 0 se não incluído, mas não é um erro por si só
+                return 0.0 
             try: v=float(ew.get());params[pn]=v;return v
             except ValueError: error_messages.append(f"{hn} inválido(a)."); error_fields.append(pn); return None
         def gi(ew,pn,hn):
@@ -404,7 +396,7 @@ class ACCircuitAnalyzerApp:
         gf(self.r_entry,'r_val',"Resistor (R)", self.include_r_var)
         gf(self.l_entry,'l_val',"Indutor (L)", self.include_l_var)
         gf(self.c_entry,'c_val',"Capacitor (C)", self.include_c_var)
-        gf(self.v_mag_entry,'v_mag',"Tensão Fonte (Vmag)", None)
+        gf(self.v_mag_entry,'v_mag',"Tensão Fonte (Vmag)", None) # tk.BooleanVar(value=True) implícito
         gf(self.v_phase_entry,'v_phase_deg',"Fase Fonte (θv)", None)
 
         if self.include_r_var.get() and 'r_val' in params:
@@ -468,7 +460,6 @@ class ACCircuitAnalyzerApp:
         v_phase_rad=math.radians(params.get('v_phase_deg',0)); v_source_phasor_fixed=cmath.rect(params.get('v_mag',0),v_phase_rad)
         
         for freq_current in frequencies:
-            # Define z_r, z_l, z_c com base na inclusão e topologia
             z_r = complex(r_val,0) if self.include_r_var.get() and r_val>1e-12 else \
                   (complex(1e-12,0) if topology=="Paralelo" and self.include_r_var.get() and r_val<=1e-12 else complex(0,0))
             if not self.include_r_var.get(): z_r = complex(float('inf'),0) if topology=="Paralelo" else complex(0,0)
@@ -538,7 +529,14 @@ class ACCircuitAnalyzerApp:
                 if params['selected_magnitude_plots']:
                     first_mag_plot = params['selected_magnitude_plots'][0]
                     if first_mag_plot in all_plot_data_y and all_plot_data_y[first_mag_plot]:
-                        extremum_info_for_plot = self._find_extremum(frequencies, all_plot_data_y[first_mag_plot], first_mag_plot, params['topology'])
+                        # Garante que data_y passado para _find_extremum não tem NaNs que causam erro no min/max
+                        valid_data_for_extremum = [v for v in all_plot_data_y[first_mag_plot] if not np.isnan(v)]
+                        if valid_data_for_extremum:
+                             # Se as frequências precisam ser filtradas também, isso é mais complexo.
+                             # Por agora, vamos assumir que frequencies e all_plot_data_y[first_mag_plot] têm o mesmo tamanho.
+                             # E que np.nan não será o extremo se houver números.
+                             extremum_info_for_plot = self._find_extremum(frequencies, all_plot_data_y[first_mag_plot], first_mag_plot, params['topology'])
+
 
                 self._update_embedded_plot(frequencies, all_plot_data_y, params, f0_resonance=f0_calc, extremum_info_main=extremum_info_for_plot)
                 
@@ -556,10 +554,14 @@ class ACCircuitAnalyzerApp:
             self._clear_embedded_plot(error_message=f"Parâmetros inválidos:\n{', '.join(errors if errors else [])}")
     
     def _find_extremum(self, frequencies, data_y_single_series, plot_choice_single, topology):
-        # ... (Permanece o mesmo) ...
         if not data_y_single_series or not isinstance(data_y_single_series,(list,np.ndarray)) or len(data_y_single_series)==0:return None
-        valid_data_y=[val for val in data_y_single_series if isinstance(val,(int,float)) and not (math.isinf(val) or math.isnan(val))]
-        if not valid_data_y:return None
+        # Filtra np.nan antes de min/max
+        valid_data_points = [(freq, val) for freq, val in zip(frequencies, data_y_single_series) 
+                             if isinstance(val,(int,float)) and not (math.isinf(val) or math.isnan(val))]
+        if not valid_data_points: return None
+        
+        temp_frequencies, temp_valid_data_y = zip(*valid_data_points)
+
         extremum_type,extremum_value_raw,extremum_freq = None,None,None 
         if "|" in plot_choice_single: 
             if topology=="Série":
@@ -569,22 +571,23 @@ class ACCircuitAnalyzerApp:
                 if "I_total" in plot_choice_single:extremum_type="min" 
                 elif "Z_total" in plot_choice_single:extremum_type="max" 
                 else:extremum_type="max" 
-            if extremum_type=="min":extremum_value_raw=min(valid_data_y) if valid_data_y else None
-            elif extremum_type=="max":extremum_value_raw=max(valid_data_y) if valid_data_y else None
+            
+            if extremum_type=="min":extremum_value_raw=min(temp_valid_data_y) if temp_valid_data_y else None
+            elif extremum_type=="max":extremum_value_raw=max(temp_valid_data_y) if temp_valid_data_y else None
             else:return None 
+            
             if extremum_value_raw is None:return None
             try:
-                original_indices=[i for i,val in enumerate(data_y_single_series) if math.isclose(val,extremum_value_raw,rel_tol=1e-9)]
-                if original_indices: 
-                    extremum_index=original_indices[0]
-                    extremum_freq=frequencies[extremum_index]
-                    unit_base=""
-                    if "Z_total" in plot_choice_single:unit_base="Ω"
-                    elif "I_total" in plot_choice_single:unit_base="A"
-                    elif "V_" in plot_choice_single:unit_base="V"
-                    extremum_value_formatted=self._format_value(extremum_value_raw,unit_base)
-                    return extremum_type,extremum_freq,extremum_value_raw,extremum_value_formatted
-                else:return None
+                # Encontra o índice do valor extremo na lista de dados válidos (temp_valid_data_y)
+                extremum_idx_in_valid = temp_valid_data_y.index(extremum_value_raw)
+                extremum_freq = temp_frequencies[extremum_idx_in_valid] # Frequência correspondente
+                
+                unit_base=""
+                if "Z_total" in plot_choice_single:unit_base="Ω"
+                elif "I_total" in plot_choice_single:unit_base="A"
+                elif "V_" in plot_choice_single:unit_base="V"
+                extremum_value_formatted=self._format_value(extremum_value_raw,unit_base)
+                return extremum_type,extremum_freq,extremum_value_raw,extremum_value_formatted
             except (ValueError,IndexError):return None
         return None
             
@@ -614,37 +617,36 @@ class ACCircuitAnalyzerApp:
         self.l_entry.delete(0,"end"); self.l_entry.insert(0,"0.01")
         self.c_entry.delete(0,"end"); self.c_entry.insert(0,"0.00001")
         self.include_r_var.set(True); self.include_l_var.set(True); self.include_c_var.set(True)
-        self._on_include_component_change()
+        self._on_include_component_change() # Para atualizar estado dos entries
+
         self.v_mag_entry.delete(0,"end"); self.v_mag_entry.insert(0,"10")
         self.v_phase_entry.delete(0,"end"); self.v_phase_entry.insert(0,"0")
         self.freq_details_entry.delete(0,"end"); self.freq_details_entry.insert(0,"159") 
         self.freq_start_entry.delete(0,"end"); self.freq_start_entry.insert(0,"50")
         self.freq_end_entry.delete(0,"end"); self.freq_end_entry.insert(0,"1000")
         self.num_points_entry.delete(0,"end"); self.num_points_entry.insert(0,"300")
-        for name, var in self.magnitude_plot_vars.items(): var.set(True if name == "|Z_total|" else False)
-        self.selected_phase_plot_var.set(self.phase_plot_options[0])
+        
+        for name, var in self.magnitude_plot_vars.items(): # Reseta checkboxes de plotagem
+            var.set(True if name == "|Z_total|" else False)
+        self.selected_phase_plot_var.set(self.phase_plot_options[0]) # "Nenhuma"
+
         self.angle_unit.set("degrees"); self.circuit_topology_var.set("Série")
         self.decimal_places_var.set("3"); self.scientific_notation_var.set(False)
         self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self.results_text.configure(state="disabled")
         self._trigger_realtime_plot_update()
 
-    def _grab_toplevel_safely(self, toplevel_window): # NOVO MÉTODO AUXILIAR
-        if toplevel_window and toplevel_window.winfo_exists():
-            try:
-                toplevel_window.grab_set()
-            except tk.TclError as e:
-                print(f"Alerta TclError final em grab_set (após delay): {e}")
-
-    def show_about_dialog_ctk(self): # CORRIGIDO E EXPANDIDO
+    def show_about_dialog_ctk(self): # CORRIGIDO
         if self.about_dialog_window and self.about_dialog_window.winfo_exists():
-            self.about_dialog_window.lift(); self.about_dialog_window.focus_set(); return
+            self.about_dialog_window.lift()
+            self.about_dialog_window.focus_set()
+            return
             
         self.about_dialog_window = ctk.CTkToplevel(self.master)
         self.about_dialog_window.title("Sobre Analisador de Circuito CA")
-        self.about_dialog_window.geometry("500x650") 
+        self.about_dialog_window.geometry("500x650") # Ajustado
         self.about_dialog_window.transient(self.master) 
         
-        self.about_dialog_window.after(50, self._grab_toplevel_safely, self.about_dialog_window) # Usa o método auxiliar
+        self.about_dialog_window.after(50, lambda: self._grab_toplevel_safely(self.about_dialog_window))
 
         about_scroll_frame = ctk.CTkScrollableFrame(self.about_dialog_window, corner_radius=0, fg_color="transparent")
         about_scroll_frame.pack(expand=True, fill="both", padx=0, pady=0)
@@ -659,10 +661,10 @@ class ACCircuitAnalyzerApp:
             "Ferramenta para análise de circuitos RLC CA.\n\n"
             "**Funcionalidades Implementadas:**\n"
             "- Análise de circuitos RLC **Série** e **Paralelo**.\n"
-            "- Seleção explícita de componentes (R, L, C) para análise.\n"
+            "- Seleção explícita de componentes (R, L, C) para análise.\n" 
             "- Varredura de frequência com plotagem gráfica incorporada:\n"
-            "  - Múltiplas curvas de magnitude no mesmo gráfico.\n"
-            "  - Plotagem de uma curva de fase em eixo Y secundário.\n"
+            "  - Múltiplas curvas de magnitude no mesmo gráfico.\n" 
+            "  - Plotagem de uma curva de fase em eixo Y secundário.\n" 
             "- Atualização do gráfico em tempo real ao modificar parâmetros.\n"
             "- Escala do gráfico (X e Y) determinada automaticamente (Log/Linear).\n"
             "- Exibição da frequência de ressonância (f0) teórica no gráfico.\n"
@@ -684,7 +686,7 @@ class ACCircuitAnalyzerApp:
             "- Feedback textual ('Calculando...') e barra de progresso para varreduras.\n"
             "- Opções de formatação de saída (casas decimais, notação científica).\n\n"
             "**Próximos Passos (Ideias):**\n"
-            "- Entrada de circuito via Netlist (simplificada).\n"
+            "- Entrada de circuito via Netlist (simplificada).\n" 
             "- Barra de progresso visual mais granular para varreduras longas.\n"
             "- Suporte a mais topologias / Análise Nodal.\n\n"
             "Agradecimentos por utilizar!"
@@ -716,6 +718,7 @@ class ACCircuitAnalyzerApp:
         toplevel_window.geometry(f"{popup_width}x{popup_height}+{center_x}+{center_y}")
 
     def analyze_circuit(self): 
+        # ... (Permanece o mesmo da última versão, com a barra de progresso) ...
         self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self._clear_all_entry_error_styles()
         params,errors=self._validate_all_parameters(silent=False,check_detail_freq=True)
         if not params:
@@ -723,11 +726,11 @@ class ACCircuitAnalyzerApp:
             self._clear_embedded_plot(error_message="Parâmetros de análise inválidos.")
             self.results_text.configure(state="disabled"); return
         
-        self.progress_bar_frame.pack(pady=(5,0),padx=10,fill="x",before=self.note_label) # CORRIGIDO: before=self.note_label
+        self.progress_bar_frame.pack(pady=(5,0),padx=10,fill="x",before=self.note_label)
         self.progress_bar.pack(pady=5,padx=0,fill="x"); self.progress_bar.start(); self.master.update_idletasks()
         output_text=""
         try:
-            frequencies,all_plot_data_y,f0_calc=self._calculate_sweep_data(params)
+            frequencies,all_plot_data_y,f0_calc=self._calculate_sweep_data(params) # Corrigido para 3 retornos
             extremum_info_for_plot=None
             if params['selected_magnitude_plots']:
                 first_mag_plot=params['selected_magnitude_plots'][0]
@@ -761,11 +764,9 @@ class ACCircuitAnalyzerApp:
                             elif c_val_q>1e-12 and omega_0>1e-9:q_factor_val=omega_0*c_val_q*r_val_q
                         else:q_factor_val=float('inf') 
                 elif self.include_r_var.get() and r_val_q > 1e-12: 
-                     if self.include_l_var.get() and l_val_q > 1e-12 and not self.include_c_var.get() and freq_current > 1e-12: # freq_current não definido aqui
-                          # Q para RL série é X_L/R na frequência de interesse. Não f0.
+                     if self.include_l_var.get() and l_val_q > 1e-12 and not self.include_c_var.get() and freq_current > 1e-12: # ERRO: freq_current não definido aqui
                           pass 
-                     elif self.include_c_var.get() and c_val_q > 1e-12 and not self.include_l_var.get() and freq_current > 1e-12: # freq_current não definido aqui
-                          # Q para RC série é X_C/R na frequência de interesse. Não f0.
+                     elif self.include_c_var.get() and c_val_q > 1e-12 and not self.include_l_var.get() and freq_current > 1e-12: # ERRO: freq_current não definido aqui
                           pass
                 if q_factor_val is not None:
                     if q_factor_val==float('inf'):q_factor_str,bandwidth_str="Infinito",self._format_value(0.0,"Hz")
@@ -791,35 +792,35 @@ class ACCircuitAnalyzerApp:
             self.results_text.configure(state="disabled")
 
     def _get_single_frequency_analysis_details(self, circuit_params, specific_freq):
-        # ... (Permanece o mesmo da última versão) ...
+        # ... (Permanece o mesmo da última versão)
         output = ""
         try:
-            include_r = self.include_r_var.get(); include_l = self.include_l_var.get(); include_c = self.include_c_var.get()
-            r_val = circuit_params.get('r_val',0) if include_r else 0.0
-            l_val = circuit_params.get('l_val',0) if include_l else 0.0
-            c_val = circuit_params.get('c_val',0) if include_c else 0.0
-            v_mag=circuit_params.get('v_mag',0); v_phase_deg=circuit_params.get('v_phase_deg',0)
-            topology=circuit_params.get('topology',"Série"); freq=specific_freq
-            v_phase_rad=math.radians(v_phase_deg); v_source_phasor=cmath.rect(v_mag,v_phase_rad)
+            include_r=self.include_r_var.get();include_l=self.include_l_var.get();include_c=self.include_c_var.get()
+            r_val=circuit_params.get('r_val',0) if include_r else 0.0
+            l_val=circuit_params.get('l_val',0) if include_l else 0.0
+            c_val=circuit_params.get('c_val',0) if include_c else 0.0
+            v_mag=circuit_params.get('v_mag',0);v_phase_deg=circuit_params.get('v_phase_deg',0)
+            topology=circuit_params.get('topology',"Série");freq=specific_freq
+            v_phase_rad=math.radians(v_phase_deg);v_source_phasor=cmath.rect(v_mag,v_phase_rad)
             z_r_val,z_l_val,z_c_val,xl_val,xc_val=complex(0,0),complex(0,0),complex(0,0),0.0,0.0
             if include_r:
-                if r_val > 1e-12 : z_r_val = complex(r_val,0)
-                elif r_val < 1e-12 and topology=="Paralelo": z_r_val = complex(1e-12,0)
-                else: z_r_val = complex(0,0) 
-            else: z_r_val = complex(float('inf'),0) if topology=="Paralelo" else complex(0,0) 
+                if r_val>1e-12:z_r_val=complex(r_val,0)
+                elif r_val<1e-12 and topology=="Paralelo":z_r_val=complex(1e-12,0)
+                else:z_r_val=complex(0,0) 
+            else:z_r_val=complex(float('inf'),0) if topology=="Paralelo" else complex(0,0) 
             if include_l:
-                if l_val > 1e-12 and freq > 1e-12: xl_val=2*cmath.pi*freq*l_val; z_l_val=complex(0,xl_val)
-                else: z_l_val=complex(0,0)
-            else: z_l_val = complex(float('inf'),0) if topology=="Paralelo" else complex(0,0)
+                if l_val>1e-12 and freq>1e-12:xl_val=2*cmath.pi*freq*l_val;z_l_val=complex(0,xl_val)
+                else:z_l_val=complex(0,0)
+            else:z_l_val=complex(float('inf'),0) if topology=="Paralelo" else complex(0,0)
             if include_c:
-                if c_val > 1e-12 and freq > 1e-12: xc_val=-1/(2*cmath.pi*freq*c_val); z_c_val=complex(0,xc_val)
-                else: z_c_val=complex(float('inf'),0)
-            else: z_c_val=complex(float('inf'),0) 
+                if c_val>1e-12 and freq>1e-12:xc_val=-1/(2*cmath.pi*freq*c_val);z_c_val=complex(0,xc_val)
+                else:z_c_val=complex(float('inf'),0)
+            else:z_c_val=complex(float('inf'),0) 
             z_total,i_total_source_phasor=complex(0,0),complex(0,0)
             v_r_phasor,v_l_phasor,v_c_phasor=complex(0,0),complex(0,0),complex(0,0)
             i_r_phasor,i_l_phasor,i_c_phasor=complex(0,0),complex(0,0),complex(0,0)
             p_r_comp,q_l_comp,q_c_comp=0.0,0.0,0.0
-            if topology == "Série":
+            if topology=="Série":
                 z_total=z_r_val+z_l_val+z_c_val
                 if abs(z_total)<1e-12:i_total_source_phasor=v_source_phasor/(1e-12+0j) if abs(v_source_phasor)>1e-12 else complex(0,0)
                 elif abs(z_total)==float('inf'):i_total_source_phasor=complex(0,0)
@@ -830,11 +831,11 @@ class ACCircuitAnalyzerApp:
                 i_r_phasor=i_total_source_phasor if include_r else complex(0,0)
                 i_l_phasor=i_total_source_phasor if include_l else complex(0,0)
                 i_c_phasor=i_total_source_phasor if include_c and abs(z_c_val)!=float('inf') else complex(0,0)
-                if include_r and r_val > 1e-12:p_r_comp=(abs(i_r_phasor)**2)*r_val
+                if include_r and r_val>1e-12:p_r_comp=(abs(i_r_phasor)**2)*r_val
                 if include_l and l_val>1e-12 and freq>1e-12 and abs(xl_val)>1e-12:q_l_comp=(abs(i_l_phasor)**2)*xl_val
                 if include_c and c_val>1e-12 and freq>1e-12 and abs(xc_val)>1e-12:q_c_comp=(abs(i_c_phasor)**2)*xc_val 
-            elif topology == "Paralelo":
-                y_r=1/z_r_val if include_r and abs(z_r_val)>1e-12 else complex(0,0)
+            elif topology=="Paralelo":
+                y_r=1/z_r_val if include_r and abs(z_r_val)>1e-12 else complex(0,0) 
                 y_l=1/z_l_val if include_l and abs(z_l_val)>1e-12 else complex(0,0)
                 y_c=1/z_c_val if include_c and abs(z_c_val)>1e-12 and abs(z_c_val)!=float('inf') else complex(0,0)
                 y_total=y_r+y_l+y_c
@@ -844,69 +845,69 @@ class ACCircuitAnalyzerApp:
                 if include_r:i_r_phasor=v_source_phasor*y_r 
                 if include_l:i_l_phasor=v_source_phasor*y_l
                 if include_c:i_c_phasor=v_source_phasor*y_c
-                if include_r and r_val > 1e-12: p_r_comp=(abs(v_source_phasor)**2)/r_val
-                elif include_r and r_val < 1e-12 and abs(i_r_phasor) != float('inf') : p_r_comp = abs(v_source_phasor * i_r_phasor.conjugate()).real 
-                if include_l and l_val > 1e-12 and freq > 1e-12 and abs(xl_val) > 1e-12 : q_l_comp=(abs(v_source_phasor)**2)/xl_val
-                elif include_l and l_val < 1e-12 and freq > 1e-12 and abs(i_l_phasor) != float('inf'): q_l_comp = (v_source_phasor * i_l_phasor.conjugate()).imag 
-                if include_c and c_val > 1e-12 and freq > 1e-12 and abs(xc_val) > 1e-12 : q_c_comp=(abs(v_source_phasor)**2)/xc_val
-            output += f"--- Detalhes para Frequência: {self._format_value(freq, 'Hz')} ({topology}) ---\n"
-            output += f"  Componentes Incluídos: R={'S' if self.include_r_var.get() else 'N'}, L={'S' if self.include_l_var.get() else 'N'}, C={'S' if self.include_c_var.get() else 'N'}\n"
-            if abs(z_total)==float('inf') and not (self.include_r_var.get() or self.include_l_var.get() or self.include_c_var.get()):
-                 output += f"  Impedância Total (Z_total): {self._format_value(float('inf'), 'Ω')} (Circuito totalmente aberto)\n"
-                 output += f"  Corrente Total (I_total Fonte): {self.format_phasor(complex(0,0), 'A')}\n"
+                if include_r and r_val>1e-12:p_r_comp=(abs(v_source_phasor)**2)/r_val
+                elif include_r and r_val<1e-12 and abs(i_r_phasor)!=float('inf'):p_r_comp=abs(v_source_phasor*i_r_phasor.conjugate()).real 
+                if include_l and l_val>1e-12 and freq>1e-12 and abs(xl_val)>1e-12:q_l_comp=(abs(v_source_phasor)**2)/xl_val
+                elif include_l and l_val<1e-12 and freq>1e-12 and abs(i_l_phasor)!=float('inf'):q_l_comp=(v_source_phasor*i_l_phasor.conjugate()).imag 
+                if include_c and c_val>1e-12 and freq>1e-12 and abs(xc_val)>1e-12:q_c_comp=(abs(v_source_phasor)**2)/xc_val
+            
+            output+=f"--- Detalhes para Frequência: {self._format_value(freq,'Hz')} ({topology}) ---\n"
+            output+=f"  Componentes Incluídos: R={'S' if include_r else 'N'}, L={'S' if include_l else 'N'}, C={'S' if include_c else 'N'}\n"
+            if abs(z_total)==float('inf') and not (include_r or include_l or include_c):
+                 output+=f"  Impedância Total (Z_total): {self._format_value(float('inf'),'Ω')} (Circuito totalmente aberto)\n"
+                 output+=f"  Corrente Total (I_total Fonte): {self.format_phasor(complex(0,0),'A')}\n"
             elif abs(z_total)==float('inf'):
-                 output += f"  Impedância Total (Z_total): {self._format_value(float('inf'), 'Ω')}\n"
-                 output += f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor, 'A')}\n"
+                 output+=f"  Impedância Total (Z_total): {self._format_value(float('inf'),'Ω')}\n"
+                 output+=f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor,'A')}\n"
             else:
-                output += f"  Impedância Total (Z_total): {self.format_phasor(z_total, 'Ω')}\n"
-                output += f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor, 'A')}\n"
-            output += "  ---------------------------\n"
+                output+=f"  Impedância Total (Z_total): {self.format_phasor(z_total,'Ω')}\n"
+                output+=f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor,'A')}\n"
+            output+="  ---------------------------\n"
             if topology=="Série":
-                if self.include_r_var.get(): output += f"  Tensão no Resistor (V_R): {self.format_phasor(v_r_phasor, 'V')}\n"
-                if self.include_l_var.get(): output += f"  Tensão no Indutor (V_L): {self.format_phasor(v_l_phasor, 'V')}\n"
-                if self.include_c_var.get(): output += f"  Tensão no Capacitor (V_C): {self.format_phasor(v_c_phasor, 'V')}\n"
+                if include_r:output+=f"  Tensão no Resistor (V_R): {self.format_phasor(v_r_phasor,'V')}\n"
+                if include_l:output+=f"  Tensão no Indutor (V_L): {self.format_phasor(v_l_phasor,'V')}\n"
+                if include_c:output+=f"  Tensão no Capacitor (V_C): {self.format_phasor(v_c_phasor,'V')}\n"
             elif topology=="Paralelo":
-                output += f"  Tensão nos Componentes (V_fonte): {self.format_phasor(v_source_phasor, 'V')}\n"
-                if self.include_r_var.get(): output += f"  Corrente em R (I_R): {self.format_phasor(i_r_phasor, 'A')}\n"
-                if self.include_l_var.get(): output += f"  Corrente em L (I_L): {self.format_phasor(i_l_phasor, 'A')}\n"
-                if self.include_c_var.get(): output += f"  Corrente em C (I_C): {self.format_phasor(i_c_phasor, 'A')}\n"
-            output += "  ---------------------------\n  Análise de Potência (Total da Fonte):\n"
+                output+=f"  Tensão nos Componentes (V_fonte): {self.format_phasor(v_source_phasor,'V')}\n"
+                if include_r:output+=f"  Corrente em R (I_R): {self.format_phasor(i_r_phasor,'A')}\n"
+                if include_l:output+=f"  Corrente em L (I_L): {self.format_phasor(i_l_phasor,'A')}\n"
+                if include_c:output+=f"  Corrente em C (I_C): {self.format_phasor(i_c_phasor,'A')}\n"
+            output+="  ---------------------------\n  Análise de Potência (Total da Fonte):\n"
             s_complex=v_source_phasor*i_total_source_phasor.conjugate()
             p_real,q_reactive,s_apparent_mag=s_complex.real,s_complex.imag,abs(s_complex)
             power_factor=p_real/s_apparent_mag if s_apparent_mag>1e-9 else (1.0 if abs(p_real)>1e-9 and abs(q_reactive)<1e-9 else 0.0)
             fp_type,epsilon="(N/A)",1e-9
-            if abs(s_apparent_mag)<epsilon: fp_type="(N/A - sem potência significante)"
-            elif abs(q_reactive)<epsilon: fp_type="(unitário)"
-            elif q_reactive > 0: fp_type="(atrasado - indutivo)"
-            else: fp_type="(adiantado - capacitivo)"
-            output += f"    Potência Aparente (|S|): {self._format_value(s_apparent_mag, 'VA')}\n    Potência Ativa (P): {self._format_value(p_real, 'W')}\n"
-            output += f"    Potência Reativa (Q): {self._format_value(q_reactive, 'VAR')}\n    Fator de Potência (FP): {self._format_value(power_factor)} {fp_type}\n"
-            output += "  ---------------------------\n  Potências nos Componentes:\n"
-            if self.include_r_var.get(): output += f"    Potência Ativa no Resistor (P_R): {self._format_value(p_r_comp, 'W')}\n"
-            else: output += "    P_R: N/A (R não incluído)\n"
-            if self.include_l_var.get(): output += f"    Potência Reativa no Indutor (Q_L): {self._format_value(q_l_comp, 'VAR')}\n"
-            else: output += "    Q_L: N/A (L não incluído)\n"
-            if self.include_c_var.get(): output += f"    Potência Reativa no Capacitor (Q_C): {self._format_value(q_c_comp, 'VAR')}\n"
-            else: output += "    Q_C: N/A (C não incluído)\n"
-            if self.include_r_var.get() and not (math.isinf(p_r_comp) or math.isinf(p_real) or math.isnan(p_r_comp) or math.isnan(p_real)):
+            if abs(s_apparent_mag)<epsilon:fp_type="(N/A - sem potência significante)"
+            elif abs(q_reactive)<epsilon:fp_type="(unitário)"
+            elif q_reactive > 0:fp_type="(atrasado - indutivo)"
+            else:fp_type="(adiantado - capacitivo)"
+            output+=f"    Potência Aparente (|S|): {self._format_value(s_apparent_mag,'VA')}\n    Potência Ativa (P): {self._format_value(p_real,'W')}\n"
+            output+=f"    Potência Reativa (Q): {self._format_value(q_reactive,'VAR')}\n    Fator de Potência (FP): {self._format_value(power_factor)} {fp_type}\n"
+            output+="  ---------------------------\n  Potências nos Componentes:\n"
+            if include_r:output+=f"    Potência Ativa no Resistor (P_R): {self._format_value(p_r_comp,'W')}\n"
+            else:output+="    P_R: N/A (R não incluído)\n"
+            if include_l:output+=f"    Potência Reativa no Indutor (Q_L): {self._format_value(q_l_comp,'VAR')}\n"
+            else:output+="    Q_L: N/A (L não incluído)\n"
+            if include_c:output+=f"    Potência Reativa no Capacitor (Q_C): {self._format_value(q_c_comp,'VAR')}\n"
+            else:output+="    Q_C: N/A (C não incluído)\n"
+            if include_r and not (math.isinf(p_r_comp) or math.isinf(p_real) or math.isnan(p_r_comp) or math.isnan(p_real)):
                  if abs(p_real)>1e-6 or abs(p_r_comp)>1e-6 :
-                    output += f"    (Verificação P_R ≈ P_total: {'Sim' if math.isclose(p_r_comp, p_real, rel_tol=1e-2, abs_tol=1e-3) else 'Não'})\n"
-            q_sum_comp_valid = True; q_sum_comp = 0
-            if self.include_l_var.get():
-                if math.isinf(q_l_comp) or math.isnan(q_l_comp): q_sum_comp_valid = False
-                else: q_sum_comp += q_l_comp
-            if self.include_c_var.get():
-                if math.isinf(q_c_comp) or math.isnan(q_c_comp): q_sum_comp_valid = False
-                else: q_sum_comp += q_c_comp
+                    output+=f"    (Verificação P_R ≈ P_total: {'Sim' if math.isclose(p_r_comp,p_real,rel_tol=1e-2,abs_tol=1e-3) else 'Não'})\n"
+            q_sum_comp_valid=True;q_sum_comp=0
+            if include_l:
+                if math.isinf(q_l_comp) or math.isnan(q_l_comp):q_sum_comp_valid=False
+                else:q_sum_comp+=q_l_comp
+            if include_c:
+                if math.isinf(q_c_comp) or math.isnan(q_c_comp):q_sum_comp_valid=False
+                else:q_sum_comp+=q_c_comp
             if q_sum_comp_valid and not (math.isinf(q_reactive) or math.isnan(q_reactive)):
                 if abs(q_reactive)>1e-6 or abs(q_sum_comp)>1e-6:
-                    abs_tol_q_sum = max(1e-3, abs(q_l_comp)*1e-2 if self.include_l_var.get() and not math.isinf(q_l_comp) else 0, \
-                                          abs(q_c_comp)*1e-2 if self.include_c_var.get() and not math.isinf(q_c_comp) else 0) 
-                    output += f"    (Verificação Q_L+Q_C ≈ Q_total: {'Sim' if math.isclose(q_sum_comp, q_reactive, rel_tol=1e-2, abs_tol=abs_tol_q_sum) else 'Não'})\n"
+                    abs_tol_q_sum=max(1e-3,abs(q_l_comp)*1e-2 if include_l and not math.isinf(q_l_comp) else 0,abs(q_c_comp)*1e-2 if include_c and not math.isinf(q_c_comp) else 0) 
+                    output+=f"    (Verificação Q_L+Q_C ≈ Q_total: {'Sim' if math.isclose(q_sum_comp,q_reactive,rel_tol=1e-2,abs_tol=abs_tol_q_sum) else 'Não'})\n"
             return output
         except Exception as e:
-            import traceback; traceback.print_exc()
-            return f"  Erro ao calcular detalhes para {self._format_value(specific_freq, 'Hz')} ({topology}): {e}\n"
+            import traceback;traceback.print_exc()
+            return f"  Erro ao calcular detalhes para {self._format_value(specific_freq,'Hz')} ({topology}): {e}\n"
 
     def _update_embedded_plot(self, frequencies, all_plot_data_y, params, f0_resonance=None, extremum_info_main=None):
         # ... (Permanece o mesmo da última versão) ...
