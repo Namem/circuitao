@@ -25,8 +25,6 @@ class ACCircuitAnalyzerApp:
         self.plot_variable_selected = tk.StringVar(value=self.plot_variable_options[0])
         self.circuit_topology_var = tk.StringVar(value="Série") 
         
-        # BooleanVars para escala foram removidas, pois os checkboxes foram removidos
-
         self.about_dialog_window = None
         self.fig_embedded = None
         self.ax_embedded = None
@@ -192,7 +190,6 @@ class ACCircuitAnalyzerApp:
         self.plot_container_frame.grid_columnconfigure(0, weight=1)
         self.plot_container_frame.grid_rowconfigure(0, weight=1) 
         self.plot_container_frame.grid_rowconfigure(1, weight=0) 
-        # self.plot_container_frame.grid_rowconfigure(2, weight=0) # Linha para checkboxes de escala removida
 
         self.fig_embedded = Figure(figsize=(5, 3.5), dpi=100) 
         self.ax_embedded = self.fig_embedded.add_subplot(111)
@@ -217,7 +214,6 @@ class ACCircuitAnalyzerApp:
             'freq_start': self.freq_start_entry.get(), 'freq_end': self.freq_end_entry.get(),
             'num_points': self.num_points_entry.get(),
             'plot_choice': self.plot_variable_selected.get()
-            # x_log e y_log removidos
         }
         try:
             file_path = filedialog.asksaveasfilename(
@@ -260,7 +256,7 @@ class ACCircuitAnalyzerApp:
                 
                 messagebox.showinfo("Carregar Configuração", f"Configuração carregada de:\n{file_path}")
                 self._trigger_realtime_plot_update() 
-                # Opcional: self.analyze_circuit() # Para preencher o texto também
+                self.analyze_circuit() # Roda análise completa para atualizar texto
         except FileNotFoundError:
              messagebox.showerror("Erro ao Carregar", "Arquivo não encontrado.")
         except json.JSONDecodeError:
@@ -332,14 +328,12 @@ class ACCircuitAnalyzerApp:
             except ZeroDivisionError: f0_resonance=None
         freq_start=params.get('freq_start',1); freq_end=params.get('freq_end',1000); num_points=params.get('num_points',100)
         
-        # A decisão da escala X é feita em _update_embedded_plot
-        # Mas a geração dos pontos de frequência pode usar logspace
         if freq_end > freq_start and freq_start > 0 :
-             if freq_end / freq_start > 50: # Critério para usar logspace para pontos de frequência
+             if freq_end / freq_start > 50:
                 try: frequencies = np.logspace(np.log10(freq_start), np.log10(freq_end), num_points)
                 except ValueError: frequencies = np.linspace(freq_start, freq_end, num_points)
              else: frequencies = np.linspace(freq_start, freq_end, num_points)
-        else: frequencies = np.linspace(1, 1000, 100) # Fallback
+        else: frequencies = np.linspace(1, 1000, 100)
             
         plot_data_y=[]
         v_phase_rad=math.radians(params.get('v_phase_deg',0)); v_source_phasor_fixed=cmath.rect(params.get('v_mag',0),v_phase_rad)
@@ -360,9 +354,8 @@ class ACCircuitAnalyzerApp:
             elif topology=="Paralelo":
                 y_r=1/z_r if abs(z_r)>1e-12 else complex(float('inf'),0) 
                 y_l=1/z_l if abs(z_l)>1e-12 else (complex(float('inf'),0) if l_val>0 and freq_current>0 else complex(0,0))
-                if l_val==0 and freq_current > 0: y_l=complex(float('inf'),0) # L=0 é curto, YL=inf
-                elif l_val==0 and freq_current == 0: y_l=complex(float('inf'),0) # L=0 em DC é curto
-
+                if l_val==0 and freq_current > 0: y_l=complex(float('inf'),0) 
+                elif l_val==0 and freq_current == 0: y_l=complex(float('inf'),0)
                 y_c=1/z_c if abs(z_c)>1e-12 else complex(0,0)
                 if c_val==0 : y_c=complex(0,0)     
                 y_total_sweep=y_r+y_l+y_c
@@ -383,13 +376,13 @@ class ACCircuitAnalyzerApp:
             if params.get('plot_choice') in val_map:
                 current_value_to_plot=val_map[params['plot_choice']](i_total_sweep_source,v_r_calc,v_l_calc,v_c_calc,z_r,z_l,z_c,z_total_sweep,v_source_phasor_fixed)
             plot_data_y.append(current_value_to_plot)
-        return frequencies, plot_data_y, f0_resonance # Não retorna mais auto_x_log
+        return frequencies, plot_data_y, f0_resonance
 
     def _trigger_realtime_plot_update(self, event=None, from_combobox_value=None):
         params, errors = self._validate_all_parameters(silent=True, check_detail_freq=False)
         if params:
             try:
-                frequencies, plot_data_y, f0_calc = self._calculate_sweep_data(params) # Não recebe auto_x_log
+                frequencies, plot_data_y, f0_calc = self._calculate_sweep_data(params)
                 extremum_info = self._find_extremum(frequencies, plot_data_y, params['plot_choice'], params['topology'])
                 self._update_embedded_plot(frequencies, plot_data_y, params['plot_choice'], f0_resonance=f0_calc, extremum_info=extremum_info)
                 self.results_text.configure(state="normal")
@@ -399,7 +392,7 @@ class ACCircuitAnalyzerApp:
             except Exception as e:
                 print(f"Erro ao recalcular varredura em tempo real: {e}")
                 import traceback; traceback.print_exc()
-                self._clear_embedded_plot() 
+                self._clear_embedded_plot(error_message="Erro ao atualizar gráfico.") # Mensagem de erro no gráfico
         else:
             self._clear_embedded_plot(error_message=f"Parâmetros inválidos:\n{', '.join(errors if errors else [])}")
 
@@ -433,7 +426,7 @@ class ACCircuitAnalyzerApp:
         if self.ax_embedded:
             self.ax_embedded.clear()
             if error_message:
-                self.ax_embedded.text(0.5,0.5,error_message,ha='center',va='center',fontsize=9,color='red',wrap=True) # Fonte menor
+                self.ax_embedded.text(0.5,0.5,error_message,ha='center',va='center',fontsize=9,color='red',wrap=True)
                 self.ax_embedded.set_title("Erro de Plotagem")
             else: self.ax_embedded.set_title("Aguardando Análise")
             self.ax_embedded.set_xlabel("Frequência (Hz)", fontsize=9)
@@ -469,31 +462,55 @@ class ACCircuitAnalyzerApp:
             self.about_dialog_window.lift(); self.about_dialog_window.focus_set(); return
         self.about_dialog_window = ctk.CTkToplevel(self.master)
         self.about_dialog_window.title("Sobre Analisador de Circuito CA")
-        self.about_dialog_window.geometry("450x460")
+        self.about_dialog_window.geometry("480x520") # Aumentar altura para mais texto
         self.about_dialog_window.transient(self.master) 
         self.about_dialog_window.update_idletasks() 
         try: self.about_dialog_window.grab_set() 
         except tk.TclError: self.about_dialog_window.after(100, self.about_dialog_window.grab_set)
-        about_frame = ctk.CTkFrame(self.about_dialog_window, corner_radius=10)
+        
+        about_frame = ctk.CTkScrollableFrame(self.about_dialog_window, corner_radius=10) # Tornar rolável
         about_frame.pack(expand=True, fill="both", padx=15, pady=15)
+        
         ctk.CTkLabel(about_frame, text="Analisador de Circuito CA", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(10,10))
-        info_text = ("Versão: 1.8.0 (CustomTkinter)\n\n" 
-                     "Desenvolvido como exemplo de aplicação.\n\n"
-                     "Funcionalidades:\n"
-                     "- Análise de circuito RLC Série e Paralelo.\n" 
-                     "- Varredura de frequência com plotagem em tempo real.\n"
-                     "- Exibição da frequência de ressonância no gráfico.\n"
-                     "- Marcadores de pico/mínimo no gráfico.\n"
-                     "- Cálculo de Q e Largura de Banda (BW).\n"
-                     "- Escala do gráfico automática (Log/Lin).\n"
-                     "- Cálculo de impedâncias, correntes, tensões e potências (total e por componente).\n"
-                     "- Barra de ferramentas no gráfico (Zoom, Pan, Salvar).\n"
-                     "- Análise de texto e gráfico simultâneos.\n"
-                     "- Feedback visual para entradas inválidas.\n"
-                     "- Salvar e Carregar configurações da análise.") 
-        ctk.CTkLabel(about_frame, text=info_text, justify="left", wraplength=380).pack(pady=10)
-        close_button = ctk.CTkButton(about_frame, text="Fechar", command=self.about_dialog_window.destroy, width=100)
-        close_button.pack(pady=20)
+        
+        info_text = (
+            "Versão: 1.9.0 (CustomTkinter)\n\n"
+            "Desenvolvido como uma ferramenta educacional e de análise para circuitos RLC CA.\n\n"
+            "**Funcionalidades Implementadas:**\n"
+            "- Análise de circuitos RLC Série e Paralelo.\n"
+            "- Varredura de frequência com plotagem gráfica.\n"
+            "- Atualização do gráfico em tempo real ao modificar parâmetros.\n"
+            "- Escala do gráfico (X e Y) determinada automaticamente (Log/Linear).\n"
+            "- Exibição da frequência de ressonância ($f_0$) teórica no gráfico.\n"
+            "- Marcação de pontos de máximo/mínimo na curva plotada.\n"
+            "- Cálculo e exibição do Fator de Qualidade (Q) e Largura de Banda (BW).\n"
+            "- Análise detalhada para uma frequência específica, incluindo:\n"
+            "  - Impedâncias (Z<sub>R</sub>, Z<sub>L</sub>, Z<sub>C</sub>, Z<sub>Total</sub>)\n"
+            "  - Correntes (I<sub>Total</sub>, I<sub>R</sub>, I<sub>L</sub>, I<sub>C</sub>)\n"
+            "  - Tensões (V<sub>R</sub>, V<sub>L</sub>, V<sub>C</sub>)\n"
+            "  - Potências (Aparente, Ativa, Reativa) totais e por componente (P<sub>R</sub>, Q<sub>L</sub>, Q<sub>C</sub>).\n"
+            "  - Fator de Potência.\n"
+            "- Tratamento de casos RL e RC (L=0 ou C=0), com $f_0$, Q, BW como N/A.\n"
+            "- Validação de entradas numéricas com feedback visual (bordas vermelhas).\n"
+            "- Interface gráfica com painéis para configuração e resultados.\n"
+            "- Barra de ferramentas Matplotlib no gráfico (Zoom, Pan, Salvar Imagem do Gráfico).\n"
+            "- Salvar e Carregar configurações da análise (parâmetros de entrada) em arquivos JSON.\n"
+            "- Mensagem de erro/status no gráfico se parâmetros de plotagem forem inválidos.\n"
+            "- Feedback textual simplificado para cálculos de varredura.\n\n"
+            "**Próximos Passos (Ideias):**\n"
+            "- Opções de formatação de saída (casas decimais, notação científica).\n"
+            "- Barra de progresso visual para varreduras longas.\n"
+            "- Suporte a mais topologias ou entrada via netlist.\n\n"
+            "Agradecimentos por utilizar!"
+        )
+        ctk.CTkLabel(about_frame, text=info_text, justify="left", wraplength=400).pack(pady=10, padx=5)
+        
+        # Botão fechar dentro do frame rolável
+        close_button_frame = ctk.CTkFrame(about_frame, fg_color="transparent") # Frame para centralizar o botão
+        close_button_frame.pack(pady=(10,0))
+        close_button = ctk.CTkButton(close_button_frame, text="Fechar", command=self.about_dialog_window.destroy, width=100)
+        close_button.pack()
+
         self.master.update_idletasks()
         master_x=self.master.winfo_x(); master_y=self.master.winfo_y()
         master_width=self.master.winfo_width(); master_height=self.master.winfo_height()
@@ -503,7 +520,7 @@ class ACCircuitAnalyzerApp:
             try:
                 geom_parts=self.about_dialog_window.geometry().split('+')[0].split('x')
                 popup_width,popup_height=int(geom_parts[0]),int(geom_parts[1])
-            except: popup_width,popup_height=450,460
+            except: popup_width,popup_height=480,520
         center_x=master_x+(master_width-popup_width)//2; center_y=master_y+(master_height-popup_height)//2
         self.about_dialog_window.geometry(f"{popup_width}x{popup_height}+{center_x}+{center_y}")
         self.about_dialog_window.focus_set()
@@ -521,14 +538,18 @@ class ACCircuitAnalyzerApp:
             self.results_text.configure(state="disabled")
             return
 
+        # Feedback de progresso
+        self.results_text.insert("1.0", "Calculando varredura e análise, por favor aguarde...\n\n")
+        self.master.update_idletasks() # Força atualização da UI
+
         output_text = ""
         try:
-            frequencies, plot_data_y, f0_calc = self._calculate_sweep_data(params) # auto_x_log não é mais retornado
+            frequencies, plot_data_y, f0_calc = self._calculate_sweep_data(params)
             
-            # A lógica de auto-escala é agora tratada em _update_embedded_plot
             extremum_info = self._find_extremum(frequencies, plot_data_y, params['plot_choice'], params['topology'])
             self._update_embedded_plot(frequencies, plot_data_y, params['plot_choice'], f0_resonance=f0_calc, extremum_info=extremum_info)
             
+            self.results_text.delete("1.0", "end") # Limpa a mensagem de "Calculando..."
             output_text += f"--- Resumo da Varredura ({params['topology']}) ---\n"
             output_text += f"Intervalo: {params['freq_start']:.2f} Hz a {params['freq_end']:.2f} Hz ({params['num_points']} pontos).\n"
             output_text += f"Grandeza Plotada: {params['plot_choice']}\n"
@@ -544,11 +565,10 @@ class ACCircuitAnalyzerApp:
                         elif c_val > 1e-12 and omega_0 > 1e-9 : q_factor_val = 1 / (omega_0 * c_val * r_val)
                     elif l_val > 1e-12 and c_val > 1e-12: q_factor_val = float('inf')
                 elif params['topology'] == "Paralelo":
-                    # Considera R > 0 para Q em paralelo. Se R=0, é um curto, Q~0.
                     if r_val > 1e-12: 
                         if l_val > 1e-12 and omega_0 > 1e-9: q_factor_val = r_val / (omega_0 * l_val)
                         elif c_val > 1e-12 and omega_0 > 1e-9 : q_factor_val = omega_0 * c_val * r_val
-                    elif (l_val > 1e-9 or c_val > 1e-9): # R é zero (ou muito pequeno)
+                    elif (l_val > 1e-9 or c_val > 1e-9): 
                          q_factor_val = 0 
                 if q_factor_val is not None:
                     if q_factor_val == float('inf'): q_factor_str, bandwidth_str = "Infinito", "0.00 Hz"
@@ -566,14 +586,15 @@ class ACCircuitAnalyzerApp:
                 output_text += "Nenhuma frequência para análise detalhada foi fornecida ou era inválida.\n"
             self.results_text.insert("1.0", output_text)
         except Exception as e:
+            self.results_text.delete("1.0", "end") # Limpa a mensagem de "Calculando..." em caso de erro
             error_msg = f"Erro inesperado durante a análise: {str(e)}"
             messagebox.showerror("Erro Inesperado", error_msg)
             self.results_text.insert("1.0", error_msg)
+            self._clear_embedded_plot(error_message="Erro na análise.")
             import traceback; traceback.print_exc()
         self.results_text.configure(state="disabled")
 
     def _get_single_frequency_analysis_details(self, circuit_params, specific_freq):
-        # ... (Permanece o mesmo da última versão) ...
         output = ""
         try:
             r_val = circuit_params.get('r_val',0); l_val = circuit_params.get('l_val',0); c_val = circuit_params.get('c_val',0)
@@ -633,22 +654,25 @@ class ACCircuitAnalyzerApp:
                  output += f"  Impedância Total (Z_total): Infinita (Circuito Aberto)\n"
                  output += f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor, 'A')}\n"
                  v_r_out,v_l_out,v_c_out = complex(0,0),complex(0,0),v_source_phasor
+                 if r_val == 0 and l_val == 0 and c_val >0: v_c_out = v_source_phasor # Apenas Capacitor
+                 elif r_val == 0 and c_val == 0 and l_val > 0: v_l_out = v_source_phasor # Apenas Indutor
+                 elif l_val == 0 and c_val == 0 and r_val > 0: v_r_out = v_source_phasor # Apenas Resistor
                  output += f"  Tensão no Resistor (V_R): {self.format_phasor(v_r_out, 'V')}\n"
                  output += f"  Tensão no Indutor (V_L): {self.format_phasor(v_l_out, 'V')}\n"
                  output += f"  Tensão no Capacitor (V_C): {self.format_phasor(v_c_out, 'V')}\n"
             else:
                 output += f"  Impedância Total (Z_total): {self.format_phasor(z_total, 'Ω')}\n"
                 output += f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor, 'A')}\n"
-            output += "  ---------------------------\n"
-            if topology=="Série":
-                output += f"  Tensão no Resistor (V_R): {self.format_phasor(v_r_phasor, 'V')}\n"
-                output += f"  Tensão no Indutor (V_L): {self.format_phasor(v_l_phasor, 'V')}\n"
-                output += f"  Tensão no Capacitor (V_C): {self.format_phasor(v_c_phasor, 'V')}\n"
-            elif topology=="Paralelo":
-                output += f"  Tensão (V_R=V_L=V_C): {self.format_phasor(v_source_phasor, 'V')}\n"
-                output += f"  Corrente em R (I_R): {self.format_phasor(i_r_phasor, 'A')}\n"
-                output += f"  Corrente em L (I_L): {self.format_phasor(i_l_phasor, 'A')}\n"
-                output += f"  Corrente em C (I_C): {self.format_phasor(i_c_phasor, 'A')}\n"
+                output += "  ---------------------------\n"
+                if topology=="Série":
+                    output += f"  Tensão no Resistor (V_R): {self.format_phasor(v_r_phasor, 'V')}\n"
+                    output += f"  Tensão no Indutor (V_L): {self.format_phasor(v_l_phasor, 'V')}\n"
+                    output += f"  Tensão no Capacitor (V_C): {self.format_phasor(v_c_phasor, 'V')}\n"
+                elif topology=="Paralelo":
+                    output += f"  Tensão (V_R=V_L=V_C): {self.format_phasor(v_source_phasor, 'V')}\n"
+                    output += f"  Corrente em R (I_R): {self.format_phasor(i_r_phasor, 'A')}\n"
+                    output += f"  Corrente em L (I_L): {self.format_phasor(i_l_phasor, 'A')}\n"
+                    output += f"  Corrente em C (I_C): {self.format_phasor(i_c_phasor, 'A')}\n"
             output += "  ---------------------------\n  Análise de Potência (Total da Fonte):\n"
             s_complex=v_source_phasor*i_total_source_phasor.conjugate()
             p_real,q_reactive,s_apparent_mag=s_complex.real,s_complex.imag,abs(s_complex)
@@ -682,7 +706,6 @@ class ACCircuitAnalyzerApp:
         if not (self.fig_embedded and self.ax_embedded and self.canvas_embedded): return 
         self.ax_embedded.clear(); legend_handles, legend_labels = [], []
         
-        # Escala automática baseada nos dados, já que os checkboxes foram removidos
         if len(frequencies) > 1 and frequencies[-1]/frequencies[0] > 50:
              self.ax_embedded.set_xscale('log')
         else:
@@ -700,7 +723,7 @@ class ACCircuitAnalyzerApp:
         else: self.ax_embedded.set_yscale('linear')
 
         self.ax_embedded.plot(frequencies, plot_data_y, marker='.', linestyle='-', markersize=3)
-        self.ax_embedded.set_title(f"{y_label_choice} vs Frequência ({self.circuit_topology_var.get()})")
+        self.ax_embedded.set_title(f"{y_label_choice} vs Frequência ({self.circuit_topology_var.get()})", fontsize=10)
         self.ax_embedded.set_xlabel("Frequência (Hz)", fontsize=9); self.ax_embedded.set_ylabel(y_label_choice, fontsize=9)
         self.ax_embedded.grid(True, which="both", linestyle="--", linewidth=0.5)
         self.ax_embedded.tick_params(axis='both', which='major', labelsize=8)
