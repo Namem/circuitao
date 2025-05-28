@@ -61,6 +61,30 @@ class ACCircuitAnalyzerApp:
         self.current_v_load_mag = None
         self.current_freq = None
         # ---
+        # --- Editor State Variables ---
+        self.selected_component_tool = None
+        self.circuit_elements_on_canvas = []
+        self.next_element_id = 0
+        self.currently_selected_element_id = None
+        self.selection_outline_color = "blue" # Or use a CTk theme color
+        self.default_outline_color = "black" # Default outline for symbols
+        # --- Drag State Variables ---
+        self.is_dragging = False
+        self.drag_start_mouse_x = 0
+        self.drag_start_mouse_y = 0
+        # ---
+        # --- Terminal Visual Properties ---
+        self.terminal_radius = 3
+        self.terminal_fill_color = "black"
+        self.terminal_outline_color = "black" # Or self.default_outline_color
+        # --- Wire Drawing State ---
+        self.is_drawing_wire = False
+        self.wire_start_info = None # Will store {'element_id': str, 'terminal_name': str, 'abs_x': float, 'abs_y': float}
+        self.wire_preview_line_id = None
+        self.wires_on_canvas = [] # Stores successfully drawn wires
+        self.next_wire_id = 0
+
+        self.wire_hit_radius = 10 # Pixel radius for detecting a click on a terminal
 
         main_app_frame = ctk.CTkFrame(master_window, fg_color="transparent")
         main_app_frame.pack(expand=True, fill="both", padx=5, pady=5)
@@ -234,6 +258,7 @@ class ACCircuitAnalyzerApp:
         tab_results = tab_view.add("Resultados")
         tab_circuit = tab_view.add("Circuito")
         tab_phasors = tab_view.add("Fasores")
+        tab_editor = tab_view.add("Editor") # Nova aba
 
         tab_results.grid_columnconfigure(0, weight=1)
         tab_results.grid_rowconfigure(0, weight=1)
@@ -241,6 +266,11 @@ class ACCircuitAnalyzerApp:
         tab_circuit.grid_rowconfigure(0, weight=1)
         tab_phasors.grid_columnconfigure(0, weight=1)
         tab_phasors.grid_rowconfigure(0, weight=1)
+        # Configurar grid para a aba Editor
+        tab_editor.grid_columnconfigure(0, weight=0) # Coluna da paleta (largura ~150px)
+        tab_editor.grid_columnconfigure(1, weight=1) # Coluna do canvas (expansível)
+        tab_editor.grid_rowconfigure(0, weight=1)    # Linha única expansível
+
 
         self.results_text = ctk.CTkTextbox(tab_results, corner_radius=6, wrap="word", font=ctk.CTkFont(family="monospace", size=11))
         self.results_text.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
@@ -270,11 +300,1184 @@ class ACCircuitAnalyzerApp:
         self.toolbar_main_plot.update()
         self.toolbar_main_plot.grid(row=1, column=0, sticky="ew", padx=2, pady=(0,2))
 
+        # --- Painel da Paleta de Componentes (Esquerda) para a aba Editor ---
+        palette_frame = ctk.CTkFrame(tab_editor, width=180, corner_radius=0) # Ajuste a largura conforme necessário
+        palette_frame.grid(row=0, column=0, sticky="nsw", padx=(5,0), pady=5)
+        palette_frame.grid_propagate(False) # Impede que os botões redimensionem o frame além do width
+
+        ctk.CTkLabel(palette_frame, text="Componentes", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=10, padx=10)
+
+        # Botões da Paleta (a lógica de comando virá depois)
+        self.btn_resistor_tool = ctk.CTkButton(palette_frame, text="Resistor (R)", command=lambda: self._select_tool("RESISTOR"))
+        self.btn_resistor_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_capacitor_tool = ctk.CTkButton(palette_frame, text="Capacitor (C)", command=lambda: self._select_tool("CAPACITOR"))
+        self.btn_capacitor_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_inductor_tool = ctk.CTkButton(palette_frame, text="Indutor (L)", command=lambda: self._select_tool("INDUCTOR"))
+        self.btn_inductor_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_vs_tool = ctk.CTkButton(palette_frame, text="Fonte de Tensão (VS)", command=lambda: self._select_tool("VS"))
+        self.btn_vs_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_is_tool = ctk.CTkButton(palette_frame, text="Fonte de Corrente (IS)", command=lambda: self._select_tool("IS"))
+        self.btn_is_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_gnd_tool = ctk.CTkButton(palette_frame, text="Terra (GND)", command=lambda: self._select_tool("GND"))
+        self.btn_gnd_tool.pack(pady=5, padx=10, fill="x")
+
+        # Wire tool will be handled later
+        self.btn_wire_tool = ctk.CTkButton(palette_frame, text="Fio (Wire)", command=lambda: self._select_tool("WIRE"))
+        self.btn_wire_tool.pack(pady=5, padx=10, fill="x")
+
+        # Botão para Gerar Netlist
+        self.btn_generate_netlist = ctk.CTkButton(palette_frame, text="Gerar Netlist", command=self._initiate_netlist_generation)
+        self.btn_generate_netlist.pack(pady=(20,5), padx=10, fill="x")
+
+        # --- Painel do Canvas de Desenho (Direita) para a aba Editor ---
+        canvas_frame = ctk.CTkFrame(tab_editor, corner_radius=0, fg_color="transparent")
+        canvas_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        canvas_frame.grid_columnconfigure(0, weight=1)
+        canvas_frame.grid_rowconfigure(0, weight=1)
+
+        self.editor_canvas = tk.Canvas(canvas_frame, bg=self._get_ctk_bg_color(), highlightthickness=0) # Usar cor de fundo do tema
+        self.editor_canvas.grid(row=0, column=0, sticky="nsew")
+        # self.editor_canvas.bind("<Button-1>", self._handle_canvas_left_click) # Replaced by ButtonPress-1
+        self.editor_canvas.bind("<ButtonPress-1>", self._on_canvas_drag_start)
+        self.editor_canvas.bind("<B1-Motion>", self._on_canvas_drag_motion)
+        self.editor_canvas.bind("<ButtonRelease-1>", self._on_canvas_drag_release)
+        self.editor_canvas.bind("<Double-Button-1>", self._on_canvas_double_click) 
+        self.editor_canvas.bind("<Escape>", self._on_escape_key_press)
+        self.editor_canvas.bind("<Delete>", self._on_delete_key_press)
+        self.editor_canvas.bind("<Motion>", self._update_wire_preview) # For wire preview
+
         self._clear_main_plot(initial_message="Diagrama Fasorial: Insira netlist e analise.")
         self._clear_static_circuit_diagram(initial_message="Diagrama do Circuito: Aguardando análise via netlist.")
 
         self.master.after(10, self._on_include_component_change)
         self._on_include_component_change()
+
+    def _on_canvas_drag_start(self, event):
+        self.editor_canvas.focus_set() # Ensure canvas has focus for keyboard events
+
+        if self.selected_component_tool == "WIRE":
+            if not self.is_drawing_wire: # Trying to start a new wire
+                if self._start_wire_drawing(event.x, event.y):
+                    # Wire started successfully, do nothing more on this click
+                    return
+                # If _start_wire_drawing returned False, it means no terminal was clicked.
+                # Allow user to try again without deselecting the tool.
+            else:
+                # If self.is_drawing_wire is True, this is the second click to finalize or cancel.
+                self._try_finalize_wire(event.x, event.y)
+            return # Prevent further processing if WIRE tool is active
+        elif self.selected_component_tool is not None: # Note: elif here
+            self._add_element_on_canvas(event) # This will reset selected_component_tool
+            self.is_dragging = False # Ensure not dragging a newly added component
+        else:
+            # No tool active, try to select an existing component
+            self._handle_selection(event) # This updates self.currently_selected_element_id
+            if self.currently_selected_element_id is not None:
+                self.is_dragging = True
+                self.drag_start_mouse_x = event.x
+                self.drag_start_mouse_y = event.y
+                
+                # Optional: Lift the selected element's items to the top
+                selected_element = next((el for el in self.circuit_elements_on_canvas if el["id"] == self.currently_selected_element_id), None)
+                if selected_element:
+                    for item_id in selected_element["canvas_item_ids"]:
+                        self.editor_canvas.lift(item_id)
+            else:
+                self.is_dragging = False
+
+    def _on_canvas_drag_motion(self, event):
+        if self.is_dragging and self.currently_selected_element_id:
+            dx = event.x - self.drag_start_mouse_x
+            dy = event.y - self.drag_start_mouse_y
+
+            element_to_move = None
+            for el in self.circuit_elements_on_canvas:
+                if el["id"] == self.currently_selected_element_id:
+                    element_to_move = el
+                    break
+            
+            if element_to_move:
+                # Move the graphical items on the canvas
+                for item_canvas_id in element_to_move["canvas_item_ids"]:
+                    self.editor_canvas.move(item_canvas_id, dx, dy)
+                
+                # Update the stored coordinates of the element
+                element_to_move["x"] += dx
+                element_to_move["y"] += dy
+
+                # Now, update the wires connected
+                wires_to_update_ids = set()
+                for terminal in element_to_move.get("terminals", []):
+                    for wire_id in terminal.get("connected_wire_ids", []):
+                        wires_to_update_ids.add(wire_id)
+
+                for wire_id_to_update in wires_to_update_ids:
+                    wire_object = next((w for w in self.wires_on_canvas if w["id"] == wire_id_to_update), None)
+                    if wire_object:
+                        start_coords = self._get_terminal_absolute_coords(wire_object['start_element_id'], wire_object['start_terminal_name'])
+                        end_coords = self._get_terminal_absolute_coords(wire_object['end_element_id'], wire_object['end_terminal_name'])
+
+                        if start_coords and end_coords:
+                            self.editor_canvas.coords(wire_object['canvas_line_id'],
+                                                      start_coords[0], start_coords[1], end_coords[0], end_coords[1])
+
+                # Update the drag start position for the next relative move
+                self.drag_start_mouse_x = event.x
+                self.drag_start_mouse_y = event.y
+
+    def _on_canvas_drag_release(self, event):
+        if self.is_dragging:
+            self.is_dragging = False
+            if self.currently_selected_element_id:
+                element = next((el for el in self.circuit_elements_on_canvas if el["id"] == self.currently_selected_element_id), None)
+                if element:
+                    print(f"Elemento '{element['id']}' movido para ({element['x']}, {element['y']})")
+        # Deselection on empty click is handled by _handle_selection called in _on_canvas_drag_start
+
+    def _start_wire_drawing(self, click_x, click_y):
+        hit_radius_sq = self.wire_hit_radius ** 2 # Use squared distance for efficiency
+
+        for element in self.circuit_elements_on_canvas:
+            if not element.get("terminals"): # Skip elements without terminals
+                continue
+            for terminal_info in element["terminals"]:
+                abs_term_x = element['x'] + terminal_info['x_offset']
+                abs_term_y = element['y'] + terminal_info['y_offset']
+
+                # Calculate squared distance from click to terminal center
+                dist_sq = (click_x - abs_term_x)**2 + (click_y - abs_term_y)**2
+
+                if dist_sq < hit_radius_sq:
+                    self.is_drawing_wire = True
+                    self.wire_start_info = {
+                        'element_id': element['id'],
+                        'terminal_name': terminal_info['name'],
+                        'abs_x': abs_term_x,
+                        'abs_y': abs_term_y
+                    }
+                    # Create the preview line, initially from start point to the same start point (or click point)
+                    self.wire_preview_line_id = self.editor_canvas.create_line(
+                        abs_term_x, abs_term_y,
+                        click_x, click_y, # End of line will follow mouse
+                        fill="gray", dash=(2, 2), tags=("wire_preview")
+                    )
+                    print(f"Iniciando fio de {element['id']}/{terminal_info['name']} em ({abs_term_x:.2f},{abs_term_y:.2f})")
+                    return True # Wire successfully started
+        
+        print("Nenhum terminal encontrado no ponto de clique para iniciar fio.")
+        return False # No terminal found at click location
+
+    def _update_wire_preview(self, event):
+        if self.is_drawing_wire and self.wire_preview_line_id is not None and self.wire_start_info:
+            mouse_x, mouse_y = event.x, event.y
+            start_x = self.wire_start_info['abs_x']
+            start_y = self.wire_start_info['abs_y']
+            
+            # Update the coordinates of the preview line
+            self.editor_canvas.coords(self.wire_preview_line_id, start_x, start_y, mouse_x, mouse_y)
+
+    def _try_finalize_wire(self, click_x, click_y):
+        hit_radius_sq = self.wire_hit_radius ** 2
+        found_end_terminal = False
+
+        for end_element in self.circuit_elements_on_canvas:
+            if not end_element.get("terminals"):
+                continue
+            for end_terminal_info in end_element["terminals"]:
+                abs_end_term_x = end_element['x'] + end_terminal_info['x_offset']
+                abs_end_term_y = end_element['y'] + end_terminal_info['y_offset']
+
+                dist_sq = (click_x - abs_end_term_x)**2 + (click_y - abs_end_term_y)**2
+
+                if dist_sq < hit_radius_sq:
+                    # Check if it's the same terminal as the start
+                    if (end_element['id'] == self.wire_start_info['element_id'] and
+                        end_terminal_info['name'] == self.wire_start_info['terminal_name']):
+                        print("Tentativa de conectar fio ao mesmo terminal de início. Cancelando.")
+                        self._cancel_wire_drawing()
+                        return
+
+                    # Valid end terminal found
+                    found_end_terminal = True
+
+                    # Delete preview line
+                    if self.wire_preview_line_id:
+                        self.editor_canvas.delete(self.wire_preview_line_id)
+                        self.wire_preview_line_id = None
+
+                    # Draw permanent wire
+                    wire_id_str = f"wire_{self.next_wire_id}"
+                    permanent_line_id = self.editor_canvas.create_line(
+                        self.wire_start_info['abs_x'], self.wire_start_info['abs_y'],
+                        abs_end_term_x, abs_end_term_y,
+                        fill="black", width=2, tags=("wire", wire_id_str)
+                    )
+
+                    new_wire = {
+                        "id": wire_id_str,
+                        "start_element_id": self.wire_start_info['element_id'],
+                        "start_terminal_name": self.wire_start_info['terminal_name'],
+                        "end_element_id": end_element['id'],
+                        "end_terminal_name": end_terminal_info['name'],
+                        "canvas_line_id": permanent_line_id
+                    }
+                    self.wires_on_canvas.append(new_wire)
+                    self.next_wire_id += 1
+
+                    # Update connected_wire_ids in terminals
+                    # Start terminal
+                    start_el_ref = next((el for el in self.circuit_elements_on_canvas if el["id"] == new_wire["start_element_id"]), None)
+                    if start_el_ref:
+                        start_term_ref = next((t for t in start_el_ref.get("terminals", []) if t["name"] == new_wire["start_terminal_name"]), None)
+                        if start_term_ref:
+                            start_term_ref.setdefault("connected_wire_ids", []).append(new_wire["id"])
+
+                    # End terminal
+                    end_el_ref = next((el for el in self.circuit_elements_on_canvas if el["id"] == new_wire["end_element_id"]), None)
+                    if end_el_ref:
+                        end_term_ref = next((t for t in end_el_ref.get("terminals", []) if t["name"] == new_wire["end_terminal_name"]), None)
+                        if end_term_ref:
+                            end_term_ref.setdefault("connected_wire_ids", []).append(new_wire["id"])
+
+                    print(f"Fio {new_wire['id']} conectado de {new_wire['start_element_id']}/{new_wire['start_terminal_name']} para {new_wire['end_element_id']}/{new_wire['end_terminal_name']}")
+                    break # Break from inner loop (terminals)
+            if found_end_terminal:
+                break # Break from outer loop (elements)
+
+        if not found_end_terminal:
+            print("Nenhum terminal de destino encontrado. Cancelando desenho do fio.")
+            self._cancel_wire_drawing() # This will also reset state
+            return # Explicit return after cancel
+
+        # Reset state after successful wire creation
+        self.is_drawing_wire = False
+        self.wire_start_info = None
+        # self.wire_preview_line_id should already be None or deleted
+        # Do not reset self.selected_component_tool to allow drawing multiple wires
+
+    def _cancel_wire_drawing(self):
+        if self.is_drawing_wire: # Check if we are actually in drawing mode
+            if self.wire_preview_line_id:
+                self.editor_canvas.delete(self.wire_preview_line_id)
+                self.wire_preview_line_id = None
+            
+            self.is_drawing_wire = False
+            self.wire_start_info = None
+            # self.wire_preview_line_id is already handled
+            print("Desenho de fio cancelado.")
+        # No need to reset selected_component_tool here, user might want to try again.
+
+    def _on_escape_key_press(self, event=None): # event is optional
+        print("Tecla Escape pressionada.")
+        if self.is_drawing_wire:
+            self._cancel_wire_drawing()
+            
+    def _get_terminal_absolute_coords(self, element_id, terminal_name):
+        target_element = next((el for el in self.circuit_elements_on_canvas if el["id"] == element_id), None)
+        if not target_element:
+            print(f"Debug: Element {element_id} not found in _get_terminal_absolute_coords")
+            return None
+
+        target_terminal_info = next((term for term in target_element.get("terminals", []) if term["name"] == terminal_name), None)
+        if not target_terminal_info:
+            print(f"Debug: Terminal {terminal_name} on element {element_id} not found in _get_terminal_absolute_coords")
+            return None
+
+        abs_x = target_element['x'] + target_terminal_info['x_offset']
+        abs_y = target_element['y'] + target_terminal_info['y_offset']
+        return abs_x, abs_y
+
+
+    def _on_canvas_double_click(self, event):
+        # Find the item clicked, similar to _handle_selection
+        items_nearby = self.editor_canvas.find_closest(event.x, event.y, halo=5)
+        
+        element_id_to_edit = None
+        if items_nearby:
+            item_id = items_nearby[0] # Get the ID of the closest graphical item
+            tags = self.editor_canvas.gettags(item_id)
+            
+            # Check if the item belongs to a component symbol and has a valid ID
+            # We check for "component_symbol" as the primary tag for hit detection on the main body
+            if tags and "component_symbol" in tags:
+                potential_element_id = tags[0] # By convention, the first tag is the unique element ID
+                # Verify this ID corresponds to a managed element
+                if any(element["id"] == potential_element_id for element in self.circuit_elements_on_canvas):
+                    element_id_to_edit = potential_element_id
+        
+        if element_id_to_edit:
+            self._edit_element_properties(element_id_to_edit)
+
+    def _handle_selection(self, event):
+        items_nearby = self.editor_canvas.find_closest(event.x, event.y, halo=5)
+        
+        element_id_to_select = None
+        if items_nearby:
+            item_id = items_nearby[0] # Get the ID of the closest graphical item
+            tags = self.editor_canvas.gettags(item_id)
+            
+            # Check if the item is a main component symbol and has a valid ID
+            if tags and "component_symbol" in tags:
+                potential_element_id = tags[0] # By convention, the first tag is the unique element ID
+                # Verify this ID corresponds to a managed element
+                if any(element["id"] == potential_element_id for element in self.circuit_elements_on_canvas):
+                    element_id_to_select = potential_element_id
+        
+        if element_id_to_select:
+            self._select_element(element_id_to_select)
+        else:
+            self._deselect_all_elements()
+
+    def _select_element(self, element_id_to_select):
+        if self.currently_selected_element_id == element_id_to_select:
+            return # Already selected
+
+        if self.currently_selected_element_id:
+            self._deselect_all_elements() # Deselect the old one
+
+        self.currently_selected_element_id = element_id_to_select
+        
+        for element in self.circuit_elements_on_canvas:
+            if element["id"] == self.currently_selected_element_id:
+                for item_canvas_id in element["canvas_item_ids"]:
+                    item_type = self.editor_canvas.type(item_canvas_id)
+                    # Apply selection style to main visual parts
+                    if item_type in ["rectangle", "oval", "line"]: 
+                        try:
+                            self.editor_canvas.itemconfig(item_canvas_id, outline=self.selection_outline_color, width=2)
+                        except tk.TclError: # Some items might not have 'outline' (e.g., text)
+                            pass
+                print(f"Elemento selecionado: {element['id']}")
+                break
+
+    def _deselect_all_elements(self):
+        if self.currently_selected_element_id:
+            element_id_to_deselect = self.currently_selected_element_id
+            self.currently_selected_element_id = None # Clear selection first
+            
+            for element in self.circuit_elements_on_canvas:
+                if element["id"] == element_id_to_deselect:
+                    for item_canvas_id in element["canvas_item_ids"]:
+                        item_type = self.editor_canvas.type(item_canvas_id)
+                        if item_type in ["rectangle", "oval", "line"]:
+                            try:
+                                # Restore default appearance
+                                self.editor_canvas.itemconfig(item_canvas_id, outline=self.default_outline_color, width=1)
+                                # Note: This sets width to 1. If original widths varied and need exact restoration,
+                                # this part would need to be more complex (e.g., store original widths).
+                                # For capacitor plates (orig width 2), inductor arcs (orig 1.5), GND (orig 1.5)
+                                # this will make them thinner when deselected. This is acceptable for a clear visual cue.
+                            except tk.TclError:
+                                pass
+                    print(f"Elemento deselecionado: {element_id_to_deselect}")
+                    break
+
+    def _edit_element_properties(self, element_id):
+        element = next((el for el in self.circuit_elements_on_canvas if el["id"] == element_id), None)
+        if not element:
+            print(f"Erro: Elemento com ID '{element_id}' não encontrado para edição.")
+            return
+
+        element_type = element['type']
+        current_value = element['properties'].get('value', '') # Get current value for potential display in prompt or default
+
+        prompt_title = "Editar Propriedade"
+        # Default prompt_text, will be overridden by specific types
+        prompt_text = f"Novo valor para {element_type} ({element_id}):" 
+
+        # Customize prompt based on component type
+        if element_type == "RESISTOR":
+            prompt_text = f"Valor da Resistência ({element_id}) [Ex: 1k, 100, 2.2M]:"
+        elif element_type == "CAPACITOR":
+            prompt_text = f"Valor da Capacitância ({element_id}) [Ex: 1u, 100n, 47p]:"
+        elif element_type == "INDUCTOR":
+            prompt_text = f"Valor da Indutância ({element_id}) [Ex: 1m, 100u, 2.2]:"
+        elif element_type == "VS":
+            # For VS, we might want mag and phase later, but for now just magnitude string
+            prompt_text = f"Valor da Tensão ({element_id}) [Ex: 10V, 220V 0deg]:"
+        elif element_type == "IS":
+            # For IS, just magnitude string for now
+            prompt_text = f"Valor da Corrente ({element_id}) [Ex: 1A, 0.5A 30deg]:"
+        elif element_type == "GND":
+            print(f"Não é possível editar propriedades de um elemento {element_type}.")
+            return # GND has no editable value in this context
+        else:
+             print(f"Edição de propriedades não implementada para o tipo '{element_type}'.")
+             return
+
+        # Use CTkInputDialog to get the new value
+        dialog = ctk.CTkInputDialog(text=prompt_text, title=prompt_title)
+        # To pre-fill the dialog (optional): dialog.entry.insert(0, current_value)
+        new_value_str = dialog.get_input()
+
+        if new_value_str is not None: # User didn't cancel
+            new_value_str = new_value_str.strip()
+            if new_value_str != "":
+                # Store the new value (basic string storage for now)
+                # More robust parsing (1k, 1u, etc.) and validation can be added later
+                # if you need to convert these to numerical values for simulation from the editor.
+                element['properties']['value'] = new_value_str
+                self._update_element_label(element_id)
+                print(f"Propriedade 'value' de '{element_id}' atualizada para: '{new_value_str}'")
+            else:
+                 # User entered empty string, could choose to clear value or ignore
+                 print(f"Entrada vazia para '{element_id}'. Valor não alterado (ou poderia ser limpo).")
+        # else: User cancelled the dialog
+
+    def _delete_selected_element(self):
+        if self.currently_selected_element_id is None:
+            print("Nenhum elemento selecionado para deletar.")
+            return
+
+        element_to_delete = None
+        element_index = -1
+        for i, el in enumerate(self.circuit_elements_on_canvas):
+            if el["id"] == self.currently_selected_element_id:
+                element_to_delete = el
+                element_index = i
+                break
+        
+        if element_to_delete:
+            # --- Wire Deletion Logic ---
+            terminals_of_deleted_element = element_to_delete.get("terminals", [])
+            wires_to_remove_from_canvas_and_list_ids = set()
+            for terminal in terminals_of_deleted_element:
+                for wire_id in terminal.get("connected_wire_ids", []):
+                    wires_to_remove_from_canvas_and_list_ids.add(wire_id)
+
+            for wire_id_to_remove in list(wires_to_remove_from_canvas_and_list_ids): # Iterate over a copy
+                wire_object_idx = -1
+                wire_object = None
+                for i_w, w_obj in enumerate(self.wires_on_canvas):
+                    if w_obj["id"] == wire_id_to_remove:
+                        wire_object = w_obj
+                        wire_object_idx = i_w
+                        break
+                
+                if wire_object:
+                    # Delete visual wire from canvas
+                    self.editor_canvas.delete(wire_object['canvas_line_id'])
+
+                    # Remove wire reference from the OTHER connected terminal
+                    other_element_id = None
+                    other_terminal_name = None
+                    if wire_object['start_element_id'] == element_to_delete['id']:
+                        other_element_id = wire_object['end_element_id']
+                        other_terminal_name = wire_object['end_terminal_name']
+                    else:
+                        other_element_id = wire_object['start_element_id']
+                        other_terminal_name = wire_object['start_terminal_name']
+                    
+                    other_element = next((el for el in self.circuit_elements_on_canvas if el["id"] == other_element_id), None)
+                    if other_element and other_element['id'] != element_to_delete['id']: # Ensure other element is not the one being deleted
+                        other_terminal = next((term for term in other_element.get("terminals", []) if term["name"] == other_terminal_name), None)
+                        if other_terminal and wire_id_to_remove in other_terminal.get("connected_wire_ids", []):
+                            other_terminal["connected_wire_ids"].remove(wire_id_to_remove)
+                    
+                    # Remove wire from the main list
+                    if wire_object_idx != -1:
+                        self.wires_on_canvas.pop(wire_object_idx)
+            # --- End Wire Deletion Logic ---
+
+            # Delete all associated graphical items from the canvas
+            for item_id in element_to_delete.get("canvas_item_ids", []):
+                self.editor_canvas.delete(item_id)
+            # Remove the element from the internal list
+            self.circuit_elements_on_canvas.pop(element_index)
+            print(f"Elemento '{self.currently_selected_element_id}' deletado.")
+            self.currently_selected_element_id = None # Clear selection
+        else:
+            # This case should ideally not happen if currently_selected_element_id is valid
+            print(f"Erro: Elemento selecionado com ID '{self.currently_selected_element_id}' não encontrado na lista para deleção.")
+            self.currently_selected_element_id = None # Clear the invalid selection ID
+
+
+    def _select_tool(self, tool_type):
+        self.selected_component_tool = tool_type
+        print(f"Ferramenta selecionada: {self.selected_component_tool}")
+        # Optional: Update UI to show selected tool (e.g., change button color, cursor)
+
+    def _add_element_on_canvas(self, event):
+        # Deselect any currently selected element when trying to add a new one
+        if self.currently_selected_element_id:
+            self._deselect_all_elements()
+            
+
+        if self.selected_component_tool is None or self.selected_component_tool == "WIRE": # Wire handled differently
+            if self.selected_component_tool == "WIRE":
+                print("Modo Fio selecionado - lógica de desenho de fio a ser implementada.")
+            return
+
+        x, y = event.x, event.y
+        element_id_str = f"{self.selected_component_tool.lower()}_{self.next_element_id}"
+        self.next_element_id += 1
+
+        # Define default values for properties
+        default_value = "1" # Generic default, should be overridden
+        if self.selected_component_tool == "RESISTOR": default_value = "1kΩ"
+        elif self.selected_component_tool == "CAPACITOR": default_value = "1µF"
+        elif self.selected_component_tool == "INDUCTOR": default_value = "1mH"
+        elif self.selected_component_tool == "VS": default_value = "10V" # Example, could be "10V 0deg"
+        elif self.selected_component_tool == "IS": default_value = "1A"  # Example, could be "1A 0deg"
+        elif self.selected_component_tool == "GND": default_value = "" # GND has no value label
+
+        canvas_item_ids = []
+        terminals_data = [] # Initialize to empty list
+
+        if self.selected_component_tool == "RESISTOR":
+            canvas_item_ids, terminals_data = self._draw_resistor(x, y, element_id_str)
+        elif self.selected_component_tool == "CAPACITOR":
+            canvas_item_ids, terminals_data = self._draw_capacitor(x, y, element_id_str)
+        elif self.selected_component_tool == "INDUCTOR":
+            canvas_item_ids, terminals_data = self._draw_inductor(x, y, element_id_str)
+        elif self.selected_component_tool == "VS":
+            canvas_item_ids, terminals_data = self._draw_voltage_source(x, y, element_id_str)
+        elif self.selected_component_tool == "IS":
+            canvas_item_ids, terminals_data = self._draw_current_source(x, y, element_id_str)
+        elif self.selected_component_tool == "GND":
+            canvas_item_ids, terminals_data = self._draw_ground(x, y, element_id_str)
+
+        if canvas_item_ids: # If symbol items were drawn
+            new_element = {
+                "id": element_id_str,
+                "type": self.selected_component_tool,
+                "x": x, 
+                "y": y,
+                "canvas_item_ids": canvas_item_ids, # Now includes all visual parts including terminals
+                "terminals": terminals_data,       # Stores the list of terminal information
+                "properties": {"value": default_value, "label_id": None} # Default value and label_id
+            }
+            # Add to list BEFORE drawing the label, as _update_element_label looks it up
+            self.circuit_elements_on_canvas.append(new_element) 
+
+            if new_element['type'] != "GND": # Don't draw value label for GND
+                 self._update_element_label(new_element['id']) # Draw the initial value label
+            
+            print(f"Adicionado: {new_element}")
+
+        self.selected_component_tool = None # Resetar ferramenta após adicionar
+        print("Ferramenta resetada.")
+
+    def _update_element_label(self, element_id):
+        element = next((el for el in self.circuit_elements_on_canvas if el["id"] == element_id), None)
+        if not element or 'properties' not in element or 'value' not in element['properties']:
+            print(f"Erro: Elemento '{element_id}' ou suas propriedades não encontradas para atualizar rótulo.")
+            return
+
+        current_label_id = element['properties'].get('label_id')
+        label_text = str(element['properties']['value'])
+
+        # Check if the current_label_id is valid and exists on canvas
+        if current_label_id is not None and self.editor_canvas.find_withtag(current_label_id):
+            self.editor_canvas.itemconfig(current_label_id, text=label_text)
+        else: # Create new label
+            # Position the label relative to the element's center (x, y)
+            label_x = element['x']
+            label_y = element['y'] + 20 # Example: 20px below the center of the symbol
+
+            new_label_id = self.editor_canvas.create_text(
+                label_x, label_y,
+                text=label_text,
+                tags=(element_id, "property_label"), # Use the element ID as a tag, plus a generic one
+                anchor="n" # Anchor to the north (top center of the text)
+            )
+            element['properties']['label_id'] = new_label_id
+            # Add the new label item ID to the element's list of canvas items so it moves with the component
+            if new_label_id not in element['canvas_item_ids']: # Avoid duplicates if logic ever re-runs
+                element['canvas_item_ids'].append(new_label_id)
+
+    def _on_delete_key_press(self, event):
+        # The 'event' argument is passed by Tkinter but not used in this method.
+        print("Tecla Delete pressionada.") # For debugging
+        self._delete_selected_element()
+
+    def _draw_resistor(self, x, y, element_id_tag):
+        size_w, size_h = 60, 20; term_len = 5
+        all_visual_item_ids = []
+        terminals_data = []
+
+        # 1. Draw resistor body
+        body_id = self.editor_canvas.create_rectangle(
+            x - size_w // 2, y - size_h // 2, x + size_w // 2, y + size_h // 2,
+            outline=self.default_outline_color, fill="white", tags=(element_id_tag, "component_symbol", "RESISTOR"))
+        all_visual_item_ids.append(body_id)
+
+        # 2. Type Label "R"
+        label_id = self.editor_canvas.create_text(x, y, text="R", tags=(element_id_tag, "label", "RESISTOR_label"))
+        all_visual_item_ids.append(label_id)
+
+        # 3. Terminals and Legs
+        # Terminal 1 (Left)
+        term1_x_offset = -(size_w / 2 + term_len + self.terminal_radius)
+        term1_y_offset = 0
+        term1_abs_x, term1_abs_y = x + term1_x_offset, y + term1_y_offset
+        term1_canvas_id = self.editor_canvas.create_oval(
+            term1_abs_x - self.terminal_radius, term1_abs_y - self.terminal_radius,
+            term1_abs_x + self.terminal_radius, term1_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "T1", "connectable")
+        )
+        all_visual_item_ids.append(term1_canvas_id)
+        terminals_data.append({
+            "name": "T1", "x_offset": term1_x_offset, "y_offset": term1_y_offset,
+            "canvas_item_id": term1_canvas_id, "connected_wire_ids": []
+        })
+        leg1_id = self.editor_canvas.create_line(
+            x - size_w // 2, y, term1_abs_x + self.terminal_radius, term1_abs_y, # Connects body to edge of terminal circle
+            fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg1_id)
+
+        # Terminal 2 (Right)
+        term2_x_offset = (size_w / 2 + term_len + self.terminal_radius)
+        term2_y_offset = 0
+        term2_abs_x, term2_abs_y = x + term2_x_offset, y + term2_y_offset
+        term2_canvas_id = self.editor_canvas.create_oval(
+            term2_abs_x - self.terminal_radius, term2_abs_y - self.terminal_radius,
+            term2_abs_x + self.terminal_radius, term2_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "T2", "connectable")
+        )
+        all_visual_item_ids.append(term2_canvas_id)
+        terminals_data.append({
+            "name": "T2", "x_offset": term2_x_offset, "y_offset": term2_y_offset,
+            "canvas_item_id": term2_canvas_id, "connected_wire_ids": []
+        })
+        leg2_id = self.editor_canvas.create_line(
+            x + size_w // 2, y, term2_abs_x - self.terminal_radius, term2_abs_y, # Connects body to edge of terminal circle
+            fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg2_id)
+        
+        return all_visual_item_ids, terminals_data
+
+    def _draw_capacitor(self, x, y, element_id_tag):
+        plate_w, plate_gap, plate_h = 15, 8, 20; term_len = 15
+        all_visual_item_ids = []
+        terminals_data = []
+
+        # Capacitor Plates
+        plate1_id = self.editor_canvas.create_line(x - plate_gap // 2, y - plate_h // 2, x - plate_gap // 2, y + plate_h // 2, width=2, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol", "CAPACITOR"))
+        all_visual_item_ids.append(plate1_id)
+        plate2_id = self.editor_canvas.create_line(x + plate_gap // 2, y - plate_h // 2, x + plate_gap // 2, y + plate_h // 2, width=2, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol", "CAPACITOR"))
+        all_visual_item_ids.append(plate2_id)
+
+        # Type label 'C' is drawn above the component
+        label_id = self.editor_canvas.create_text(x, y - plate_h, text="C", tags=(element_id_tag, "label", "CAPACITOR_label"))
+        all_visual_item_ids.append(label_id)
+
+        # Terminals and Legs
+        # Terminal 1 (Left)
+        term1_x_offset = -(plate_gap / 2 + term_len + self.terminal_radius)
+        term1_y_offset = 0
+        term1_abs_x, term1_abs_y = x + term1_x_offset, y + term1_y_offset
+        term1_canvas_id = self.editor_canvas.create_oval(
+            term1_abs_x - self.terminal_radius, term1_abs_y - self.terminal_radius,
+            term1_abs_x + self.terminal_radius, term1_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "T1", "connectable"))
+        all_visual_item_ids.append(term1_canvas_id)
+        terminals_data.append({"name": "T1", "x_offset": term1_x_offset, "y_offset": term1_y_offset, "canvas_item_id": term1_canvas_id, "connected_wire_ids": []})
+        leg1_id = self.editor_canvas.create_line(x - plate_gap // 2, y, term1_abs_x + self.terminal_radius, term1_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg1_id)
+
+        # Terminal 2 (Right)
+        term2_x_offset = (plate_gap / 2 + term_len + self.terminal_radius)
+        term2_y_offset = 0
+        term2_abs_x, term2_abs_y = x + term2_x_offset, y + term2_y_offset
+        term2_canvas_id = self.editor_canvas.create_oval(
+            term2_abs_x - self.terminal_radius, term2_abs_y - self.terminal_radius,
+            term2_abs_x + self.terminal_radius, term2_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "T2", "connectable"))
+        all_visual_item_ids.append(term2_canvas_id)
+        terminals_data.append({"name": "T2", "x_offset": term2_x_offset, "y_offset": term2_y_offset, "canvas_item_id": term2_canvas_id, "connected_wire_ids": []})
+        leg2_id = self.editor_canvas.create_line(x + plate_gap // 2, y, term2_abs_x - self.terminal_radius, term2_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg2_id)
+
+        return all_visual_item_ids, terminals_data
+
+    def _draw_inductor(self, x, y, element_id_tag):
+        num_loops = 3; loop_radius = 8; total_width = num_loops * loop_radius * 1.5; term_len = 5
+        all_visual_item_ids = []
+        terminals_data = []
+
+        # Inductor Loops
+        start_x_body = x - total_width / 2
+        for i in range(num_loops):
+            cx = start_x_body + i * (loop_radius * 1.5) + loop_radius / 2
+            arc_id = self.editor_canvas.create_arc(
+                cx - loop_radius, y - loop_radius, cx + loop_radius, y + loop_radius,
+                start=0, extent=180, style=tk.ARC, outline=self.default_outline_color, width=1.5, tags=(element_id_tag, "component_symbol", "INDUCTOR"))
+            all_visual_item_ids.append(arc_id)
+        
+        # Type label 'L'
+        label_id = self.editor_canvas.create_text(x, y - loop_radius - 5, text="L", tags=(element_id_tag, "label", "INDUCTOR_label"))
+        all_visual_item_ids.append(label_id)
+
+        # Terminals and Legs
+        # Terminal 1 (Left)
+        term1_x_offset = -(total_width / 2 + term_len + self.terminal_radius)
+        term1_y_offset = 0
+        term1_abs_x, term1_abs_y = x + term1_x_offset, y + term1_y_offset
+        term1_canvas_id = self.editor_canvas.create_oval(
+            term1_abs_x - self.terminal_radius, term1_abs_y - self.terminal_radius,
+            term1_abs_x + self.terminal_radius, term1_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "T1", "connectable"))
+        all_visual_item_ids.append(term1_canvas_id)
+        terminals_data.append({"name": "T1", "x_offset": term1_x_offset, "y_offset": term1_y_offset, "canvas_item_id": term1_canvas_id, "connected_wire_ids": []})
+        leg1_id = self.editor_canvas.create_line(start_x_body, y, term1_abs_x + self.terminal_radius, term1_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg1_id)
+
+        # Terminal 2 (Right)
+        term2_x_offset = (total_width / 2 + term_len + self.terminal_radius)
+        term2_y_offset = 0
+        term2_abs_x, term2_abs_y = x + term2_x_offset, y + term2_y_offset
+        term2_canvas_id = self.editor_canvas.create_oval(
+            term2_abs_x - self.terminal_radius, term2_abs_y - self.terminal_radius,
+            term2_abs_x + self.terminal_radius, term2_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "T2", "connectable"))
+        all_visual_item_ids.append(term2_canvas_id)
+        terminals_data.append({"name": "T2", "x_offset": term2_x_offset, "y_offset": term2_y_offset, "canvas_item_id": term2_canvas_id, "connected_wire_ids": []})
+        leg2_id = self.editor_canvas.create_line(start_x_body + total_width, y, term2_abs_x - self.terminal_radius, term2_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg2_id)
+
+        return all_visual_item_ids, terminals_data
+
+    def _draw_voltage_source(self, x, y, element_id_tag):
+        body_radius = 15; term_len = 10
+        all_visual_item_ids = []
+        terminals_data = []
+
+        # Source Body
+        body_id = self.editor_canvas.create_oval(x - body_radius, y - body_radius, x + body_radius, y + body_radius, outline=self.default_outline_color, fill="white", tags=(element_id_tag, "component_symbol", "VS"))
+        all_visual_item_ids.append(body_id)
+        plus_id = self.editor_canvas.create_text(x, y - body_radius / 3, text="+", font=("Arial", 10), tags=(element_id_tag, "label_detail", "VS_label"))
+        all_visual_item_ids.append(plus_id)
+        minus_id = self.editor_canvas.create_text(x, y + body_radius / 3, text="-", font=("Arial", 12), tags=(element_id_tag, "label_detail", "VS_label"))
+        all_visual_item_ids.append(minus_id)
+
+        # Terminals and Legs
+        # Terminal 1 (Positive, Top)
+        term1_name = "P"
+        term1_x_offset = 0
+        term1_y_offset = -(body_radius + term_len + self.terminal_radius)
+        term1_abs_x, term1_abs_y = x + term1_x_offset, y + term1_y_offset
+        term1_canvas_id = self.editor_canvas.create_oval(
+            term1_abs_x - self.terminal_radius, term1_abs_y - self.terminal_radius,
+            term1_abs_x + self.terminal_radius, term1_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", term1_name, "connectable"))
+        all_visual_item_ids.append(term1_canvas_id)
+        terminals_data.append({"name": term1_name, "x_offset": term1_x_offset, "y_offset": term1_y_offset, "canvas_item_id": term1_canvas_id, "connected_wire_ids": []})
+        leg1_id = self.editor_canvas.create_line(x, y - body_radius, term1_abs_x, term1_abs_y + self.terminal_radius, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg1_id)
+
+        # Terminal 2 (Negative, Bottom)
+        term2_name = "N"
+        term2_x_offset = 0
+        term2_y_offset = (body_radius + term_len + self.terminal_radius)
+        term2_abs_x, term2_abs_y = x + term2_x_offset, y + term2_y_offset
+        term2_canvas_id = self.editor_canvas.create_oval(
+            term2_abs_x - self.terminal_radius, term2_abs_y - self.terminal_radius,
+            term2_abs_x + self.terminal_radius, term2_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", term2_name, "connectable"))
+        all_visual_item_ids.append(term2_canvas_id)
+        terminals_data.append({"name": term2_name, "x_offset": term2_x_offset, "y_offset": term2_y_offset, "canvas_item_id": term2_canvas_id, "connected_wire_ids": []})
+        leg2_id = self.editor_canvas.create_line(x, y + body_radius, term2_abs_x, term2_abs_y - self.terminal_radius, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg2_id)
+
+        return all_visual_item_ids, terminals_data
+
+    def _draw_current_source(self, x, y, element_id_tag):
+        body_radius = 15; term_len = 10; arrow_len = body_radius * 0.6
+        all_visual_item_ids = []
+        terminals_data = []
+
+        # Source Body
+        body_id = self.editor_canvas.create_oval(x - body_radius, y - body_radius, x + body_radius, y + body_radius, outline=self.default_outline_color, fill="white", tags=(element_id_tag, "component_symbol", "IS"))
+        all_visual_item_ids.append(body_id)
+        arrow_id = self.editor_canvas.create_line(x, y + arrow_len / 2, x, y - arrow_len / 2, arrow=tk.LAST, fill=self.default_outline_color, tags=(element_id_tag, "label_detail", "IS_label"))
+        all_visual_item_ids.append(arrow_id)
+
+        # Terminals and Legs
+        # Terminal 1 (Output, Top)
+        term1_name = "OUT"
+        term1_x_offset = 0
+        term1_y_offset = -(body_radius + term_len + self.terminal_radius)
+        term1_abs_x, term1_abs_y = x + term1_x_offset, y + term1_y_offset
+        term1_canvas_id = self.editor_canvas.create_oval(
+            term1_abs_x - self.terminal_radius, term1_abs_y - self.terminal_radius,
+            term1_abs_x + self.terminal_radius, term1_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", term1_name, "connectable"))
+        all_visual_item_ids.append(term1_canvas_id)
+        terminals_data.append({"name": term1_name, "x_offset": term1_x_offset, "y_offset": term1_y_offset, "canvas_item_id": term1_canvas_id, "connected_wire_ids": []})
+        leg1_id = self.editor_canvas.create_line(x, y - body_radius, term1_abs_x, term1_abs_y + self.terminal_radius, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg1_id)
+
+        # Terminal 2 (Input, Bottom)
+        term2_name = "IN"
+        term2_x_offset = 0
+        term2_y_offset = (body_radius + term_len + self.terminal_radius)
+        term2_abs_x, term2_abs_y = x + term2_x_offset, y + term2_y_offset
+        term2_canvas_id = self.editor_canvas.create_oval(
+            term2_abs_x - self.terminal_radius, term2_abs_y - self.terminal_radius,
+            term2_abs_x + self.terminal_radius, term2_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", term2_name, "connectable"))
+        all_visual_item_ids.append(term2_canvas_id)
+        terminals_data.append({"name": term2_name, "x_offset": term2_x_offset, "y_offset": term2_y_offset, "canvas_item_id": term2_canvas_id, "connected_wire_ids": []})
+        leg2_id = self.editor_canvas.create_line(x, y + body_radius, term2_abs_x, term2_abs_y - self.terminal_radius, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg2_id)
+
+        return all_visual_item_ids, terminals_data
+
+    def _draw_ground(self, x, y, element_id_tag):
+        all_visual_item_ids = []
+        terminals_data = []
+        connection_point_y_offset = -10 # Relative to y, this is where the symbol connects
+
+        # Ground symbol lines
+        all_visual_item_ids.append(self.editor_canvas.create_line(x, y + connection_point_y_offset, x, y, width=1.5, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol", "GND")))
+        all_visual_item_ids.append(self.editor_canvas.create_line(x - 10, y, x + 10, y, width=1.5, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol", "GND")))
+        all_visual_item_ids.append(self.editor_canvas.create_line(x - 6, y + 3, x + 6, y + 3, width=1.5, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol", "GND")))
+        all_visual_item_ids.append(self.editor_canvas.create_line(x - 3, y + 6, x + 3, y + 6, width=1.5, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol", "GND")))
+
+        # Terminal
+        term1_name = "T1"
+        # The terminal circle is centered self.terminal_radius above the connection_point_y_offset
+        term1_x_offset = 0
+        term1_y_offset = connection_point_y_offset - self.terminal_radius 
+        term1_abs_x, term1_abs_y = x + term1_x_offset, y + term1_y_offset
+        
+        term1_canvas_id = self.editor_canvas.create_oval(
+            term1_abs_x - self.terminal_radius, term1_abs_y - self.terminal_radius,
+            term1_abs_x + self.terminal_radius, term1_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", term1_name, "connectable"))
+        all_visual_item_ids.append(term1_canvas_id)
+        terminals_data.append({"name": term1_name, "x_offset": term1_x_offset, "y_offset": term1_y_offset, "canvas_item_id": term1_canvas_id, "connected_wire_ids": []})
+        
+        # Leg connecting the symbol's connection point to the terminal circle
+        # The symbol's connection point is at (x, y + connection_point_y_offset)
+        # The terminal circle's bottom edge is at (term1_abs_x, term1_abs_y + self.terminal_radius)
+        leg1_id = self.editor_canvas.create_line(
+            x, y + connection_point_y_offset, 
+            term1_abs_x, term1_abs_y + self.terminal_radius, 
+            fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_item_ids.append(leg1_id)
+
+        return all_visual_item_ids, terminals_data
+
+    def _parse_numeric_value(self, value_str):
+        value_str = str(value_str).strip().lower()
+        original_value_for_error = value_str # Keep original for error return
+
+        # Remove common units from the end to isolate prefix and number
+        units_to_strip = ["kω", "ω", "kf", "f", "kh", "h",
+                          "kohms", "ohms", "kfarads", "farads", "khenries", "henries",
+                          "kv", "v", "ka", "a"]
+        for unit in units_to_strip:
+            if value_str.endswith(unit):
+                value_str = value_str[:-len(unit)]
+                break # Avoid stripping parts of prefixes like 'm' from 'mF' if 'F' is stripped first
+
+        # More specific unit handling for single letter units after number
+        # (e.g. 10u, 10m, 10k)
+        # This part is tricky because 'm' can be milli or mega, 'k' is kilo.
+        # The order of checks for suffixes is important.
+
+        val_num_part = ""
+        suffix = ""
+
+        # Try to separate numeric part from potential single-letter suffix
+        for i, char in enumerate(reversed(value_str)):
+            if not char.isdigit() and char != '.':
+                val_num_part = value_str[:len(value_str)-1-i]
+                suffix = value_str[len(value_str)-1-i:]
+                break
+        if not suffix and value_str.replace('.', '', 1).isdigit(): # No suffix found, all numeric
+            val_num_part = value_str
+            suffix = ""
+        elif not val_num_part and suffix: # Only suffix found (e.g. "k") - invalid
+             return "VALOR_INVALIDO"
+        elif not val_num_part and not suffix and value_str: # Non-empty, non-numeric, no suffix (e.g. "abc")
+            return "VALOR_INVALIDO"
+        elif not value_str: # Empty string
+            return "VALOR_INVALIDO"
+
+
+        multiplier = 1.0
+        if suffix == 't': # Tera
+            multiplier = 1e12
+        elif suffix == 'g': # Giga
+            multiplier = 1e9
+        elif suffix == 'meg' or suffix == 'ma': # Mega (ma for mega-ohms sometimes)
+            multiplier = 1e6
+        elif suffix == 'k': # kilo
+            multiplier = 1e3
+        elif suffix == 'm': # milli
+            multiplier = 1e-3
+        elif suffix == 'u' or suffix == 'µ': # micro
+            multiplier = 1e-6
+        elif suffix == 'n': # nano
+            multiplier = 1e-9
+        elif suffix == 'p': # pico
+            multiplier = 1e-12
+        elif suffix == 'f': # femto
+            multiplier = 1e-15
+        elif suffix != "": # Unknown suffix if not empty
+            # If suffix is not recognized, it might be part of the number or invalid
+            # For now, assume it's invalid if it's not one of the above and not empty
+            # This means "100ohms" would have "ohms" stripped, then "100" processed.
+            # "100x" would have "x" as suffix and be invalid.
+            # If suffix is empty, it's fine.
+            pass
+
+        try:
+            val = float(val_num_part) * multiplier
+            # Standard format for netlist values, avoid excessive precision for simple numbers
+            if 1e-4 <= abs(val) < 1e7 and val == int(val):
+                return f"{int(val)}"
+            return f"{val:.6g}" # General format, scientific for large/small
+        except ValueError:
+            return "VALOR_INVALIDO"
+
+    def _parse_source_ac_value(self, value_str, default_phase="0"):
+        value_str = str(value_str).lower().replace("v", "").replace("a", "").replace("deg", "").strip()
+        parts = re.split(r'\s+|,|\s*∠\s*', value_str) # Split by space, comma, or angle symbol
+        parts = [p for p in parts if p] # Remove empty strings
+
+        magnitude_str = "VALOR_INVALIDO"
+        phase_str = default_phase
+
+        if len(parts) >= 1:
+            try:
+                mag_val = float(parts[0])
+                magnitude_str = f"{mag_val:.6g}"
+            except ValueError:
+                pass # magnitude_str remains VALOR_INVALIDO
+
+        if len(parts) >= 2:
+            try:
+                phase_val = float(parts[1])
+                phase_str = f"{phase_val:.6g}"
+            except ValueError:
+                pass # phase_str remains default_phase
+
+        return magnitude_str, phase_str
+
+    def _build_netlist_from_node_map(self, terminals_to_nodes_map):
+        netlist_lines = ["* Netlist Gerada pelo Editor de Circuito Interativo"]
+        element_counts = {} # To generate names like R1, R2, C1, etc.
+
+        for element in self.circuit_elements_on_canvas:
+            if element['type'] == "GND":
+                continue
+
+            type_prefix = element['type'][0].upper()
+            if element['type'] == "VS" or element['type'] == "IS":
+                type_prefix = element['type'] # VS, IS
+
+            element_counts[type_prefix] = element_counts.get(type_prefix, 0) + 1
+            component_name_for_netlist = f"{type_prefix}{element_counts[type_prefix]}"
+
+            # Get node labels for terminals
+            node_labels = []
+            terminal_names_ordered = []
+            if element['type'] in ["RESISTOR", "CAPACITOR", "INDUCTOR"]:
+                terminal_names_ordered = ["T1", "T2"]
+            elif element['type'] == "VS":
+                terminal_names_ordered = ["P", "N"] # Positive, Negative
+            elif element['type'] == "IS":
+                terminal_names_ordered = ["OUT", "IN"] # Current exits OUT, enters IN
+            # Add more for controlled sources if they are drawn
+
+            for term_name in terminal_names_ordered:
+                terminal_key = (element['id'], term_name)
+                node_label = terminals_to_nodes_map.get(terminal_key, f"NODO_DESCONHECIDO_{element['id']}_{term_name}")
+                node_labels.append(node_label)
+
+            if len(node_labels) < 2 and element['type'] not in ["GND"]: # Most components need at least 2 nodes
+                netlist_lines.append(f"* ERRO: {component_name_for_netlist} ({element['id']}) - Terminais insuficientes ou não mapeados.")
+                continue
+
+            value_str_prop = str(element['properties'].get('value', 'VALOR_PADRAO'))
+            line = ""
+
+            if element['type'] in ["RESISTOR", "CAPACITOR", "INDUCTOR"]:
+                parsed_val = self._parse_numeric_value(value_str_prop)
+                line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} {parsed_val}"
+            elif element['type'] == "VS":
+                mag, phase = self._parse_source_ac_value(value_str_prop)
+                line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} AC {mag} {phase}" # Node P, Node N
+            elif element['type'] == "IS":
+                mag, phase = self._parse_source_ac_value(value_str_prop)
+                line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} AC {mag} {phase}" # Node OUT, Node IN
+            # Add controlled sources later if needed
+            else:
+                line = f"* TIPO_NAO_SUPORTADO_PARA_NETLIST: {component_name_for_netlist} ({element['type']})"
+
+            netlist_lines.append(line)
+
+        # Add Frequency line (optional, or from a dedicated input)
+        # For now, let's assume it's taken from the manual frequency input as a fallback
+        freq_val_str = self.freq_details_entry.get()
+        parsed_freq = self._parse_numeric_value(freq_val_str if freq_val_str else "60") # Default to 60Hz if empty
+        if parsed_freq != "VALOR_INVALIDO":
+            netlist_lines.append(f"FREQ {parsed_freq}")
+        else:
+            netlist_lines.append(f"FREQ 60 * Frequência padrão, valor da entrada manual inválido: {freq_val_str}")
+
+        return "\n".join(netlist_lines)
+
+    def _display_netlist_dialog(self, netlist_string):
+        dialog = ctk.CTkToplevel(self.master)
+        dialog.title("Netlist Gerada")
+        dialog.geometry("450x500")
+        dialog.transient(self.master)
+
+        textbox = ctk.CTkTextbox(dialog, wrap="word", font=ctk.CTkFont(family="monospace", size=11))
+        textbox.pack(expand=True, fill="both", padx=10, pady=(10,5))
+        textbox.insert("1.0", netlist_string)
+        textbox.configure(state="disabled")
+
+        button_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        button_frame.pack(fill="x", padx=10, pady=(0,10))
+
+        def copy_to_clipboard():
+            self.master.clipboard_clear()
+            self.master.clipboard_append(netlist_string)
+            messagebox.showinfo("Copiado", "Netlist copiada para a área de transferência!", parent=dialog)
+
+        def load_to_analyzer():
+            self.netlist_textbox.delete("1.0", tk.END)
+            self.netlist_textbox.insert("1.0", netlist_string)
+            dialog.destroy()
+
+        copy_button = ctk.CTkButton(button_frame, text="Copiar", command=copy_to_clipboard)
+        copy_button.pack(side="left", padx=5, expand=True)
+
+        load_button = ctk.CTkButton(button_frame, text="Carregar no Analisador", command=load_to_analyzer)
+        load_button.pack(side="left", padx=5, expand=True)
+
+        close_button = ctk.CTkButton(button_frame, text="Fechar", command=dialog.destroy)
+        close_button.pack(side="left", padx=5, expand=True)
+
+        # Delay grab_set until the window is likely viewable
+        dialog.after(30, self._grab_toplevel_safely, dialog) # Adjusted delay, can be 50ms too
+        dialog.after(50, dialog.lift) # Ensure it's on top
+        dialog.after(100, self._center_toplevel_after_draw, dialog) # Center it
+
+    def _initiate_netlist_generation(self):
+        if not self.circuit_elements_on_canvas:
+            messagebox.showinfo("Gerar Netlist", "O editor de circuito está vazio. Adicione componentes e fios para gerar uma netlist.")
+            return
+
+        terminals_to_nodes_map = self._discover_and_assign_nodes()
+
+        if not terminals_to_nodes_map:
+            messagebox.showerror("Erro na Netlist", "Falha ao descobrir ou mapear os nós do circuito.")
+            return
+
+        # Verificar se todos os terminais de todos os componentes (exceto GND) foram mapeados
+        all_terminals_mapped_successfully = True
+        for element in self.circuit_elements_on_canvas:
+            if element['type'] == "GND":
+                continue
+            if not element.get('terminals'):
+                messagebox.showerror("Erro na Netlist", f"Componente '{element['id']}' ({element['type']}) não possui terminais definidos na estrutura de dados interna.")
+                all_terminals_mapped_successfully = False
+                break
+            for term_info in element['terminals']:
+                if (element['id'], term_info['name']) not in terminals_to_nodes_map:
+                    messagebox.showerror("Erro na Netlist", f"Terminal '{term_info['name']}' do componente '{element['id']}' ({element['type']}) não foi mapeado para um nó. Verifique conexões.")
+                    all_terminals_mapped_successfully = False
+                    break
+            if not all_terminals_mapped_successfully:
+                break
+
+        if not all_terminals_mapped_successfully:
+            return
+
+        netlist_string = self._build_netlist_from_node_map(terminals_to_nodes_map)
+
+        if "VALOR_INVALIDO" in netlist_string or "NODO_DESCONHECIDO" in netlist_string:
+             messagebox.showwarning("Netlist Gerada com Avisos",
+                                    "A netlist foi gerada, mas contém valores inválidos ou nós desconhecidos. "
+                                    "Verifique os valores dos componentes e as conexões no editor.\n\n"
+                                    "A netlist será exibida, mas pode não ser analisável.",
+                                    parent=self.master) # Ensure warning is on top
+
+        self._display_netlist_dialog(netlist_string)
+
+    def _discover_and_assign_nodes(self):
+        terminals_to_nodes_map = {}
+        visited_terminals = set() # Tuplas: (element_id, terminal_name)
+        current_node_label_counter = 1 # Começa em 1 para nós não-terra
+
+        # Passo 1: Processar GND
+        for element in self.circuit_elements_on_canvas:
+            if element.get("type") == "GND":
+                for terminal_gnd in element.get("terminals", []):
+                    start_key = (element['id'], terminal_gnd['name'])
+                    if start_key not in visited_terminals:
+                        self._traverse_connected_terminals(element['id'], terminal_gnd['name'], "0", 
+                                                           terminals_to_nodes_map, visited_terminals)
+        
+        # Passo 2: Processar terminais restantes
+        for element in self.circuit_elements_on_canvas:
+            # GND já foi processado e seus terminais adicionados a visited_terminals
+            # Não precisamos pular o tipo GND aqui explicitamente, pois a checagem `if terminal_key not in visited_terminals`
+            # cuidará disso se todos os terminais GND já foram visitados.
+            for terminal_info in element.get("terminals", []):
+                terminal_key = (element['id'], terminal_info['name'])
+                if terminal_key not in visited_terminals:
+                    current_node_label = str(current_node_label_counter)
+                    self._traverse_connected_terminals(element['id'], terminal_info['name'], current_node_label,
+                                                       terminals_to_nodes_map, visited_terminals)
+                    current_node_label_counter += 1
+                    
+        return terminals_to_nodes_map
+
+    def _traverse_connected_terminals(self, start_el_id, start_term_name, 
+                                     node_label_to_assign, terminals_to_nodes_map, visited_terminals):
+        
+        queue = [(start_el_id, start_term_name)] # Usando BFS com uma lista como fila
+        head = 0 # Pointer for the front of the queue
+
+        while head < len(queue):
+            current_el_id, current_term_name = queue[head]
+            head += 1
+
+            current_key = (current_el_id, current_term_name)
+            if current_key in visited_terminals:
+                continue
+            
+            visited_terminals.add(current_key)
+            terminals_to_nodes_map[current_key] = node_label_to_assign
+
+            current_element = next((el for el in self.circuit_elements_on_canvas if el["id"] == current_el_id), None)
+            if not current_element: continue
+            current_terminal_obj = next((term for term in current_element.get("terminals", []) if term["name"] == current_term_name), None)
+            if not current_terminal_obj: continue
+
+            for wire_id in current_terminal_obj.get("connected_wire_ids", []):
+                wire = next((w for w in self.wires_on_canvas if w["id"] == wire_id), None)
+                if not wire: continue
+
+                other_el_id, other_term_name = (None, None)
+                if wire['start_element_id'] == current_el_id and wire['start_terminal_name'] == current_term_name:
+                    other_el_id = wire['end_element_id']
+                    other_term_name = wire['end_terminal_name']
+                elif wire['end_element_id'] == current_el_id and wire['end_terminal_name'] == current_term_name:
+                    other_el_id = wire['start_element_id']
+                    other_term_name = wire['start_terminal_name']
+                
+                if other_el_id and other_term_name:
+                    other_key = (other_el_id, other_term_name)
+                    if other_key not in visited_terminals:
+                        # Check if already in queue to avoid redundant processing, though visited_terminals handles correctness
+                        # For simple list queue, direct check is O(N). For now, rely on visited_terminals.
+                        # If performance becomes an issue with very large connected components,
+                        # a set for `in_queue` check alongside collections.deque could be used.
+                        queue.append((other_el_id, other_term_name))
 
     def _tkinter_gray_to_hex(self, gray_string):
         """Converts Tkinter grayXX string to a hex color string."""
