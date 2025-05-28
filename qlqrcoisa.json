@@ -1,0 +1,27 @@
+{
+    "r_val": "10",
+    "l_val": "0.01",
+    "c_val": "0.00001",
+    "include_r": true,
+    "include_l": true,
+    "include_c": true,
+    "v_mag": "10",
+    "v_phase_deg": "30",
+    "freq_details": "60",
+    "angle_unit": "degrees",
+    "topology": "Paralelo",
+    "freq_start": "1",
+    "freq_end": "60",
+    "num_points": "10",
+    "magnitude_plots": {
+        "|Z_total|": true,
+        "|I_total|": true,
+        "|V_R|": true,
+        "|V_L|": true,
+        "|V_C|": true
+    },
+    "phase_plot": "Nenhuma",
+    "decimal_places": "3",
+    "scientific_notation": false,
+    "netlist_content": "# Exemplo Netlist RLC S\u00e9rie (com m\u00faltiplos componentes):\n# VS 1 0 AC 10 0  (Nome N\u00f31 N\u00f32 Tipo Vmag Vfase_graus)\n# R1 1 2 10         (Nome N\u00f31 N\u00f32 Valor)\n# R2 2 3 20\n# L1 3 4 0.01\n# C1 4 0 1e-5\n# TOPOLOGIA SERIE   (Opcional: para c\u00e1lculo de equivalentes R,L,C)\n# FREQ_DETALHES 159 (Opcional: para an\u00e1lise em ponto \u00fanico)\n# --- \n# Exemplo RLC Paralelo (com m\u00faltiplos componentes):\n# VS 1 0 AC 5 30\n# R1 1 0 100\n# R2 1 0 200\n# L1 1 0 0.05\n# C1 1 0 2e-5\n# C2 1 0 3e-5\n# TOPOLOGIA PARALELO"
+}

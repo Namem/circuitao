@@ -3,39 +3,25 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import cmath
 import math
-import numpy as np
-import json 
+import numpy as np 
+import json
+import re 
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-import matplotlib.colors as mcolors
 
 class ACCircuitAnalyzerApp:
     def __init__(self, master_window):
         self.master = master_window
-        master_window.title("Analisador de Circuito CA Avançado (CustomTkinter)")
-        master_window.geometry("1250x900") 
+        master_window.title("Analisador de Circuito CA (CustomTkinter) - Frequência Única")
+        master_window.geometry("1100x800") 
 
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
         self.angle_unit = tk.StringVar(value="degrees")
-        
-        self.magnitude_plot_vars = {
-            "|Z_total|": tk.BooleanVar(value=True),
-            "|I_total|": tk.BooleanVar(value=False),
-            "|V_R|": tk.BooleanVar(value=False),
-            "|V_L|": tk.BooleanVar(value=False),
-            "|V_C|": tk.BooleanVar(value=False),
-        }
-        self.plot_colors = list(mcolors.TABLEAU_COLORS.values()) + ['#FF00FF', '#A52A2A', '#00FFFF', '#FFD700', '#808080', '#008000', '#800080', '#FFC0CB']
-
-        self.phase_plot_options = ["Nenhuma", "Fase(Z_total) (°)", "Fase(I_total) (°)", 
-                                   "Fase(V_R) (°)", "Fase(V_L) (°)", "Fase(V_C) (°)"]
-        self.selected_phase_plot_var = tk.StringVar(value=self.phase_plot_options[0])
-
-        self.circuit_topology_var = tk.StringVar(value="Série") 
-        self.decimal_places_var = tk.StringVar(value="3") 
+        self.circuit_topology_var = tk.StringVar(value="Série")
+        self.decimal_places_var = tk.StringVar(value="3")
         self.scientific_notation_var = tk.BooleanVar(value=False)
 
         self.include_r_var = tk.BooleanVar(value=True)
@@ -43,25 +29,33 @@ class ACCircuitAnalyzerApp:
         self.include_c_var = tk.BooleanVar(value=True)
 
         self.about_dialog_window = None
-        self.fig_embedded = None
-        self.ax_embedded = None 
-        self.ax2_embedded = None 
-        self.canvas_embedded = None
-        self.toolbar_embedded = None
+
+        self.fig_main_plot = None
+        self.ax_main_plot = None
+        self.ax_main_plot_twin = None 
+        self.canvas_main_plot = None
+        self.toolbar_main_plot = None
+        self.circuit_diagram_canvas = None
+        self.circuit_diagram_frame = None
+
+        self.plot_container_frame = None
 
         self.error_border_color = "red"
         try:
             default_entry_color = ctk.ThemeManager.theme["CTkEntry"]["border_color"]
             current_mode = ctk.get_appearance_mode().lower()
             self.normal_border_color = default_entry_color[0] if isinstance(default_entry_color, list) and current_mode == "light" else (default_entry_color[1] if isinstance(default_entry_color, list) else default_entry_color)
-        except KeyError: 
-            self.normal_border_color = "gray50" 
+        except KeyError:
+            self.normal_border_color = "gray50"
         self.entry_widgets = {}
+
+        self.analysis_results = {} 
+        self.analysis_performed_successfully = False
 
         main_app_frame = ctk.CTkFrame(master_window, fg_color="transparent")
         main_app_frame.pack(expand=True, fill="both", padx=5, pady=5)
 
-        title_label = ctk.CTkLabel(main_app_frame, text="Analisador de Circuito CA",
+        title_label = ctk.CTkLabel(main_app_frame, text="Analisador de Circuito CA (Frequência Única)",
                                    font=ctk.CTkFont(size=24, weight="bold"))
         title_label.pack(pady=(5, 10))
 
@@ -69,7 +63,7 @@ class ACCircuitAnalyzerApp:
         panels_frame.pack(expand=True, fill="both", padx=5, pady=5)
         panels_frame.grid_columnconfigure(0, weight=1, minsize=440) 
         panels_frame.grid_columnconfigure(1, weight=2) 
-        panels_frame.grid_rowconfigure(0, weight=1)    
+        panels_frame.grid_rowconfigure(0, weight=1)
 
         left_panel_scroll_frame = ctk.CTkScrollableFrame(panels_frame, corner_radius=10)
         left_panel_scroll_frame.grid(row=0, column=0, sticky="nsew", padx=(0,10), pady=0)
@@ -81,79 +75,92 @@ class ACCircuitAnalyzerApp:
         load_button = ctk.CTkButton(config_io_frame, text="Carregar Config.", command=self.load_configuration)
         load_button.pack(side="left", padx=5, expand=True)
 
-        topology_main_label = ctk.CTkLabel(left_panel_scroll_frame, text="Configuração do Circuito",
+        netlist_main_label = ctk.CTkLabel(left_panel_scroll_frame, text="Entrada via Netlist", font=ctk.CTkFont(size=16, weight="bold"))
+        netlist_main_label.pack(pady=(15,5), anchor="w", padx=10)
+        netlist_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
+        netlist_frame.pack(pady=(0,10), padx=10, fill="x")
+        self.netlist_textbox = ctk.CTkTextbox(netlist_frame, height=150, wrap="word", font=ctk.CTkFont(family="monospace", size=11))
+        self.netlist_textbox.pack(expand=True, fill="x", padx=5, pady=5)
+        self.netlist_textbox.insert("1.0",
+            "# Exemplo Netlist RLC Série (para teste inicial):\n"
+            "# VS 1 0 AC 220 0\n"
+            "# R1 1 2 10\n# L1 2 0 0.02122\n" 
+            "# TOPOLOGIA SERIE\n# FREQ_DETALHES 60\n"
+        )
+        process_netlist_button = ctk.CTkButton(netlist_frame, text="Processar Netlist e Aplicar", command=self._parse_and_apply_netlist)
+        process_netlist_button.pack(pady=5, padx=5)
+
+        topology_main_label = ctk.CTkLabel(left_panel_scroll_frame, text="Config. Circuito (Manual / Equivalente Netlist)",
                                            font=ctk.CTkFont(size=16, weight="bold"))
         topology_main_label.pack(pady=(10,5), anchor="w", padx=10)
-        
         topology_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
         topology_frame.pack(pady=(0,10), padx=10, fill="x")
-        ctk.CTkLabel(topology_frame, text="Topologia:").pack(side="left", padx=(10,10), pady=10)
+        ctk.CTkLabel(topology_frame, text="Topologia Principal (R_eq, L_eq, C_eq):").pack(side="left", padx=(10,10), pady=10)
         self.topology_selector = ctk.CTkSegmentedButton(
             topology_frame, values=["Série", "Paralelo"],
             variable=self.circuit_topology_var, command=self._on_parameter_change)
         self.topology_selector.pack(side="left", expand=True, fill="x", padx=10, pady=10)
 
-        input_section_label = ctk.CTkLabel(left_panel_scroll_frame, text="Parâmetros do Circuito e Fonte",
+        input_section_label = ctk.CTkLabel(left_panel_scroll_frame, text="Parâmetros (Manual / Equivalente Netlist)",
                                            font=ctk.CTkFont(size=16, weight="bold"))
         input_section_label.pack(pady=(10,5), anchor="w", padx=10)
         input_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
         input_frame.pack(fill="x", padx=10, pady=(0,10))
-        input_frame.grid_columnconfigure(1, weight=0) # Checkbox column
-        input_frame.grid_columnconfigure(2, weight=1) # Entry column
-        entry_width = 130 
-        
-        self.r_check = ctk.CTkCheckBox(input_frame, text="R [Ω]:", variable=self.include_r_var, command=self._on_include_component_change)
+        input_frame.grid_columnconfigure(2, weight=1)
+        entry_width = 130
+
+        self.r_check = ctk.CTkCheckBox(input_frame, text="R_eq [Ω]:", variable=self.include_r_var, command=self._on_include_component_change)
         self.r_check.grid(row=0, column=0, columnspan=2, padx=(10,0), pady=8, sticky="w")
-        self.r_entry = ctk.CTkEntry(input_frame, width=entry_width)
-        self.r_entry.grid(row=0, column=2, padx=(0,10), pady=8, sticky="ew"); self.r_entry.insert(0, "10")
+        self.r_entry = ctk.CTkEntry(input_frame, width=entry_width); self.r_entry.insert(0, "10")
+        self.r_entry.grid(row=0, column=2, padx=(0,10), pady=8, sticky="ew")
         self.r_entry.bind("<FocusOut>", self._on_parameter_change); self.r_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['r_val'] = self.r_entry
 
-        self.l_check = ctk.CTkCheckBox(input_frame, text="L [H]:", variable=self.include_l_var, command=self._on_include_component_change)
+        self.l_check = ctk.CTkCheckBox(input_frame, text="L_eq [H]:", variable=self.include_l_var, command=self._on_include_component_change)
         self.l_check.grid(row=1, column=0, columnspan=2, padx=(10,0), pady=8, sticky="w")
-        self.l_entry = ctk.CTkEntry(input_frame, width=entry_width)
-        self.l_entry.grid(row=1, column=2, padx=(0,10), pady=8, sticky="ew"); self.l_entry.insert(0, "0.01")
+        self.l_entry = ctk.CTkEntry(input_frame, width=entry_width); self.l_entry.insert(0, "0.02122")
+        self.l_entry.grid(row=1, column=2, padx=(0,10), pady=8, sticky="ew")
         self.l_entry.bind("<FocusOut>", self._on_parameter_change); self.l_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['l_val'] = self.l_entry
-        
-        self.c_check = ctk.CTkCheckBox(input_frame, text="C [F]:", variable=self.include_c_var, command=self._on_include_component_change)
+
+        self.c_check = ctk.CTkCheckBox(input_frame, text="C_eq [F]:", variable=self.include_c_var, command=self._on_include_component_change)
         self.c_check.grid(row=2, column=0, columnspan=2, padx=(10,0), pady=8, sticky="w")
-        self.c_entry = ctk.CTkEntry(input_frame, width=entry_width)
-        self.c_entry.grid(row=2, column=2, padx=(0,10), pady=8, sticky="ew"); self.c_entry.insert(0, "0.00001")
+        self.c_entry = ctk.CTkEntry(input_frame, width=entry_width); self.c_entry.insert(0, "0") 
+        self.c_entry.grid(row=2, column=2, padx=(0,10), pady=8, sticky="ew")
         self.c_entry.bind("<FocusOut>", self._on_parameter_change); self.c_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['c_val'] = self.c_entry
-        
+        self.include_c_var.set(False) 
+
         ctk.CTkLabel(input_frame, text="Tensão Fonte (Vmag) [V]:").grid(row=3, column=0, columnspan=2, padx=10, pady=8, sticky="w")
-        self.v_mag_entry = ctk.CTkEntry(input_frame, width=entry_width)
-        self.v_mag_entry.grid(row=3, column=2, padx=(0,10), pady=8, sticky="ew"); self.v_mag_entry.insert(0, "10")
+        self.v_mag_entry = ctk.CTkEntry(input_frame, width=entry_width); self.v_mag_entry.insert(0, "220")
+        self.v_mag_entry.grid(row=3, column=2, padx=(0,10), pady=8, sticky="ew")
         self.v_mag_entry.bind("<FocusOut>", self._on_parameter_change); self.v_mag_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['v_mag'] = self.v_mag_entry
-        
+
         ctk.CTkLabel(input_frame, text="Fase Fonte (θv) [°]:").grid(row=4, column=0, columnspan=2, padx=10, pady=8, sticky="w")
-        self.v_phase_entry = ctk.CTkEntry(input_frame, width=entry_width)
-        self.v_phase_entry.grid(row=4, column=2, padx=(0,10), pady=8, sticky="ew"); self.v_phase_entry.insert(0, "0")
+        self.v_phase_entry = ctk.CTkEntry(input_frame, width=entry_width); self.v_phase_entry.insert(0, "0")
+        self.v_phase_entry.grid(row=4, column=2, padx=(0,10), pady=8, sticky="ew")
         self.v_phase_entry.bind("<FocusOut>", self._on_parameter_change); self.v_phase_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['v_phase_deg'] = self.v_phase_entry
 
-        ctk.CTkLabel(input_frame, text="Freq. para Detalhes (Hz):").grid(row=5, column=0, columnspan=2, padx=10, pady=8, sticky="w")
-        self.freq_details_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Opcional")
-        self.freq_details_entry.grid(row=5, column=2, padx=(0,10), pady=8, sticky="ew"); self.freq_details_entry.insert(0, "159")
+        ctk.CTkLabel(input_frame, text="Frequência de Análise (Hz):").grid(row=5, column=0, columnspan=2, padx=10, pady=8, sticky="w")
+        self.freq_details_entry = ctk.CTkEntry(input_frame, width=entry_width, placeholder_text="Ex: 60"); self.freq_details_entry.insert(0, "60")
+        self.freq_details_entry.grid(row=5, column=2, padx=(0,10), pady=8, sticky="ew")
+        self.freq_details_entry.bind("<FocusOut>", self._on_parameter_change); self.freq_details_entry.bind("<Return>", self._on_parameter_change)
         self.entry_widgets['freq_details'] = self.freq_details_entry
-        
+
         output_format_label = ctk.CTkLabel(left_panel_scroll_frame, text="Formatação da Saída Textual", font=ctk.CTkFont(size=16, weight="bold"))
         output_format_label.pack(pady=(15,5), anchor="w", padx=10)
-        output_format_frame_main = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10) 
+        output_format_frame_main = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
         output_format_frame_main.pack(fill="x", padx=10, pady=(0,10))
         ctk.CTkLabel(output_format_frame_main, text="Casas Decimais:").pack(side="left", padx=(10,5), pady=10)
-        self.decimal_places_menu = ctk.CTkOptionMenu(output_format_frame_main, variable=self.decimal_places_var, 
-                                                     values=["2", "3", "4", "5", "6"],
-                                                     command=self._on_formatting_change)
+        self.decimal_places_menu = ctk.CTkOptionMenu(output_format_frame_main, variable=self.decimal_places_var,
+                                                     values=["2", "3", "4", "5", "6"], command=self._on_formatting_change)
         self.decimal_places_menu.pack(side="left", padx=5, pady=10)
-        self.sci_notation_checkbox = ctk.CTkCheckBox(output_format_frame_main, text="Not. Científica", 
-                                                      variable=self.scientific_notation_var,
-                                                      command=self._on_formatting_change)
+        self.sci_notation_checkbox = ctk.CTkCheckBox(output_format_frame_main, text="Not. Científica",
+                                                      variable=self.scientific_notation_var, command=self._on_formatting_change)
         self.sci_notation_checkbox.pack(side="left", padx=10, pady=10)
-        
+
         output_options_label = ctk.CTkLabel(left_panel_scroll_frame, text="Opções de Saída Angular", font=ctk.CTkFont(size=16, weight="bold"))
         output_options_label.pack(pady=(10,5), anchor="w", padx=10)
         output_options_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
@@ -164,827 +171,916 @@ class ACCircuitAnalyzerApp:
         radians_radio = ctk.CTkRadioButton(output_options_frame, text="Radianos (rad)", variable=self.angle_unit, value="radians", command=self._on_parameter_change)
         radians_radio.pack(side="left", padx=5, pady=10)
 
-        sweep_section_label = ctk.CTkLabel(left_panel_scroll_frame, text="Parâmetros da Varredura de Frequência", font=ctk.CTkFont(size=16, weight="bold"))
-        sweep_section_label.pack(pady=(15,5), anchor="w", padx=10)
-        sweep_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
-        sweep_frame.pack(fill="x", padx=10, pady=(0,10))
-        sweep_frame.grid_columnconfigure(1, weight=1); sweep_frame.grid_columnconfigure(3, weight=1)
-        
-        ctk.CTkLabel(sweep_frame, text="Freq. Inicial (Hz):").grid(row=0, column=0, padx=10, pady=8, sticky="w")
-        self.freq_start_entry = ctk.CTkEntry(sweep_frame, placeholder_text="Ex: 50")
-        self.freq_start_entry.grid(row=0, column=1, padx=10, pady=8, sticky="ew"); self.freq_start_entry.insert(0, "50")
-        self.freq_start_entry.bind("<FocusOut>", self._on_parameter_change); self.freq_start_entry.bind("<Return>", self._on_parameter_change)
-        self.entry_widgets['freq_start'] = self.freq_start_entry
-
-        ctk.CTkLabel(sweep_frame, text="Freq. Final (Hz):").grid(row=0, column=2, padx=10, pady=8, sticky="w")
-        self.freq_end_entry = ctk.CTkEntry(sweep_frame, placeholder_text="Ex: 1000")
-        self.freq_end_entry.grid(row=0, column=3, padx=10, pady=8, sticky="ew"); self.freq_end_entry.insert(0, "1000")
-        self.freq_end_entry.bind("<FocusOut>", self._on_parameter_change); self.freq_end_entry.bind("<Return>", self._on_parameter_change)
-        self.entry_widgets['freq_end'] = self.freq_end_entry
-
-        ctk.CTkLabel(sweep_frame, text="Nº de Pontos:").grid(row=1, column=0, padx=10, pady=8, sticky="w")
-        self.num_points_entry = ctk.CTkEntry(sweep_frame, placeholder_text="Ex: 300")
-        self.num_points_entry.grid(row=1, column=1, padx=10, pady=8, sticky="ew"); self.num_points_entry.insert(0, "300")
-        self.num_points_entry.bind("<FocusOut>", self._on_parameter_change); self.num_points_entry.bind("<Return>", self._on_parameter_change)
-        self.entry_widgets['num_points'] = self.num_points_entry
-
-        # --- Seleção de Grandezas para Plotar (Múltiplas Curvas) ---
-        plot_selection_label = ctk.CTkLabel(left_panel_scroll_frame, text="Grandezas para Plotar", font=ctk.CTkFont(size=16, weight="bold"))
-        plot_selection_label.pack(pady=(15,5), anchor="w", padx=10)
-        
-        plot_selection_outer_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
-        plot_selection_outer_frame.pack(fill="x", padx=10, pady=(0,5))
-
-        ctk.CTkLabel(plot_selection_outer_frame, text="Magnitudes (Eixo Y Primário):", font=ctk.CTkFont(size=13)).pack(anchor="w", padx=10, pady=(5,2))
-        
-        self.magnitude_checkboxes_widgets = {}
-        mag_check_frame_cols = ctk.CTkFrame(plot_selection_outer_frame, fg_color="transparent")
-        mag_check_frame_cols.pack(fill="x", padx=5, pady=(0,5))
-        mag_options_per_row = 2 
-        for i, name in enumerate(self.magnitude_plot_vars.keys()):
-            var = self.magnitude_plot_vars[name]
-            cb = ctk.CTkCheckBox(mag_check_frame_cols, text=name, variable=var, command=self._on_parameter_change)
-            cb.grid(row=i // mag_options_per_row, column=i % mag_options_per_row, padx=5, pady=2, sticky="w")
-            self.magnitude_checkboxes_widgets[name] = cb
-        
-        plot_phase_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
-        plot_phase_frame.pack(fill="x", padx=10, pady=(0,10))
-        ctk.CTkLabel(plot_phase_frame, text="Fase (Eixo Y Secundário):", font=ctk.CTkFont(size=13)).pack(side="left", padx=(10,5), pady=5)
-        self.phase_plot_combobox = ctk.CTkComboBox(plot_phase_frame, values=self.phase_plot_options,
-                                                    variable=self.selected_phase_plot_var, state="readonly",
-                                                    command=lambda choice: self._on_parameter_change(from_combobox_value=choice), 
-                                                    width=180)
-        self.phase_plot_combobox.pack(side="left", padx=5, pady=5, expand=True, fill="x")
-
+        pf_correction_label = ctk.CTkLabel(left_panel_scroll_frame, text="Correção de Fator de Potência", font=ctk.CTkFont(size=16, weight="bold"))
+        pf_correction_label.pack(pady=(15,5), anchor="w", padx=10)
+        pf_correction_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
+        pf_correction_frame.pack(fill="x", padx=10, pady=(0,10))
+        pf_correction_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(pf_correction_frame, text="FP Desejado (0.01-1):").grid(row=0, column=0, padx=10, pady=8, sticky="w")
+        self.fp_desired_entry = ctk.CTkEntry(pf_correction_frame, placeholder_text="Ex: 0.95")
+        self.fp_desired_entry.grid(row=0, column=1, padx=10, pady=8, sticky="ew")
+        self.entry_widgets['fp_desired'] = self.fp_desired_entry
+        calculate_pf_button = ctk.CTkButton(pf_correction_frame, text="Calcular Capacitor de Correção", command=self._calculate_and_display_pf_correction)
+        calculate_pf_button.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
 
         action_buttons_frame = ctk.CTkFrame(left_panel_scroll_frame, fg_color="transparent")
-        action_buttons_frame.pack(pady=20, fill="x")
-        analyze_button = ctk.CTkButton(action_buttons_frame, text="Analisar e Plotar", command=self.analyze_circuit)
+        action_buttons_frame.pack(pady=(20,10), fill="x")
+        analyze_button = ctk.CTkButton(action_buttons_frame, text="Analisar Circuito", command=self.analyze_circuit)
         analyze_button.pack(side="left", padx=5, expand=True)
-        clear_button = ctk.CTkButton(action_buttons_frame, text="Limpar", command=self.clear_entries)
+        clear_button = ctk.CTkButton(action_buttons_frame, text="Limpar Entradas e Netlist", command=self.clear_entries)
         clear_button.pack(side="left", padx=5, expand=True)
         about_button = ctk.CTkButton(action_buttons_frame, text="Sobre", command=self.show_about_dialog_ctk)
         about_button.pack(side="left", padx=5, expand=True)
-
+        
         self.progress_bar_frame = ctk.CTkFrame(left_panel_scroll_frame, fg_color="transparent")
         self.progress_bar = ctk.CTkProgressBar(self.progress_bar_frame, orientation="horizontal", mode="indeterminate")
-        
-        self.note_label = ctk.CTkLabel(left_panel_scroll_frame, text="Nota: Analisa circuitos RLC Série ou Paralelo.", font=ctk.CTkFont(size=12), text_color="gray50")
+        self.note_label = ctk.CTkLabel(left_panel_scroll_frame, text="Nota: Analisa RLC Série/Paralelo (ou equivalentes Netlist) em frequência única.", font=ctk.CTkFont(size=12), text_color="gray50")
         self.note_label.pack(pady=(10,10), side="bottom")
 
         right_panel_frame = ctk.CTkFrame(panels_frame, corner_radius=10)
         right_panel_frame.grid(row=0, column=1, sticky="nsew", padx=(10,0), pady=0)
-        right_panel_frame.grid_rowconfigure(0, weight=1, minsize=200) 
-        right_panel_frame.grid_rowconfigure(1, weight=3) 
+        # Configura o right_panel_frame para expandir o TabView
+        right_panel_frame.grid_rowconfigure(0, weight=1)
         right_panel_frame.grid_columnconfigure(0, weight=1)
 
-        results_section_label_text = ctk.CTkLabel(right_panel_frame, text="Resultados da Análise", font=ctk.CTkFont(size=16, weight="bold"))
-        results_section_label_text.grid(row=0, column=0, pady=(10,0), padx=10, sticky="nw")
-        self.results_text = ctk.CTkTextbox(right_panel_frame, corner_radius=6, wrap="word", font=ctk.CTkFont(family="monospace", size=12))
-        self.results_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=(40,10))
+        # Criar TabView
+        tab_view = ctk.CTkTabview(right_panel_frame, corner_radius=8)
+        tab_view.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+        tab_results = tab_view.add("Resultados")
+        tab_circuit = tab_view.add("Circuito")
+        tab_phasors = tab_view.add("Fasores")
+
+        # Configurar grid das abas para expansão do conteúdo
+        tab_results.grid_columnconfigure(0, weight=1)
+        tab_results.grid_rowconfigure(0, weight=1)
+
+        tab_circuit.grid_columnconfigure(0, weight=1)
+        tab_circuit.grid_rowconfigure(0, weight=1)
+
+        tab_phasors.grid_columnconfigure(0, weight=1)
+        tab_phasors.grid_rowconfigure(0, weight=1) # Para o canvas do plot
+        # A rowconfigure para a toolbar dentro do plot_container_frame é mantida como está
+
+        # Aba "Resultados"
+        self.results_text = ctk.CTkTextbox(tab_results, corner_radius=6, wrap="word", font=ctk.CTkFont(family="monospace", size=11))
+        self.results_text.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.results_text.configure(state="disabled")
 
-        plot_frame_label = ctk.CTkLabel(right_panel_frame, text="Gráfico da Varredura de Frequência", font=ctk.CTkFont(size=16, weight="bold"))
-        plot_frame_label.grid(row=1, column=0, pady=(10,0), padx=10, sticky="nw")
+        # Aba "Circuito" - Frame e Canvas para o Diagrama Estático
+        self.circuit_diagram_frame = ctk.CTkFrame(tab_circuit, corner_radius=6)
+        self.circuit_diagram_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.circuit_diagram_frame.grid_columnconfigure(0, weight=1)
+        self.circuit_diagram_frame.grid_rowconfigure(0, weight=1)
         
-        self.plot_container_frame = ctk.CTkFrame(right_panel_frame, corner_radius=6)
-        self.plot_container_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(40,10))
+        self.circuit_diagram_canvas = tk.Canvas(self.circuit_diagram_frame, bg=self._get_ctk_bg_color(), highlightthickness=0)
+        self.circuit_diagram_canvas.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+
+        # Aba "Fasores" - Container para o diagrama fasorial (Matplotlib)
+        self.plot_container_frame = ctk.CTkFrame(tab_phasors, corner_radius=6)
+        self.plot_container_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         self.plot_container_frame.grid_columnconfigure(0, weight=1)
         self.plot_container_frame.grid_rowconfigure(0, weight=1) 
         self.plot_container_frame.grid_rowconfigure(1, weight=0) 
 
-        self.fig_embedded = Figure(figsize=(5, 3.5), dpi=100) 
-        self.ax_embedded = self.fig_embedded.add_subplot(111)
-        self.canvas_embedded = FigureCanvasTkAgg(self.fig_embedded, master=self.plot_container_frame)
-        canvas_widget_embedded = self.canvas_embedded.get_tk_widget()
-        canvas_widget_embedded.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self.fig_main_plot = Figure(figsize=(5, 4), dpi=100)
+        self.ax_main_plot = self.fig_main_plot.add_subplot(111)
+        self.canvas_main_plot = FigureCanvasTkAgg(self.fig_main_plot, master=self.plot_container_frame)
+        canvas_widget = self.canvas_main_plot.get_tk_widget()
+        canvas_widget.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
         
-        self.toolbar_embedded = NavigationToolbar2Tk(self.canvas_embedded, self.plot_container_frame, pack_toolbar=False)
-        self.toolbar_embedded.update()
-        self.toolbar_embedded.grid(row=1, column=0, sticky="ew", padx=2, pady=(0,2))
+        self.toolbar_main_plot = NavigationToolbar2Tk(self.canvas_main_plot, self.plot_container_frame, pack_toolbar=False)
+        self.toolbar_main_plot.update()
+        self.toolbar_main_plot.grid(row=1, column=0, sticky="ew", padx=2, pady=(0,2))
+
+        self._clear_main_plot(initial_message="Diagrama Fasorial: Selecione parâmetros e analise.")
+        self._clear_static_circuit_diagram(initial_message="Diagrama do Circuito: Aguardando análise.")
+
+        self.master.after(10, self._on_include_component_change)
+        self._on_include_component_change()
+
+    def _get_ctk_bg_color(self):
+        """Retorna a cor de fundo apropriada para o tema CTk."""
+        # Tenta obter a cor de fundo do CTkFrame, senão usa um padrão.
+        try:
+            bg_color_tuple = ctk.ThemeManager.theme["CTkFrame"]["fg_color"]
+            current_mode = ctk.get_appearance_mode()
+            if isinstance(bg_color_tuple, (list, tuple)) and len(bg_color_tuple) == 2:
+                return bg_color_tuple[0] if current_mode == "Light" else bg_color_tuple[1]
+            return bg_color_tuple # Se for uma string única
+        except Exception:
+            return "white" if ctk.get_appearance_mode() == "Light" else "#2B2B2B" # Fallback mais comum para CTk
+            
+    def _get_ctk_text_color(self):
+        """Retorna a cor de texto apropriada para o tema CTk."""
+        try:
+            text_color_tuple = ctk.ThemeManager.theme["CTkLabel"]["text_color"]
+            current_mode = ctk.get_appearance_mode()
+            if isinstance(text_color_tuple, (list, tuple)) and len(text_color_tuple) == 2:
+                return text_color_tuple[0] if current_mode == "Light" else text_color_tuple[1]
+            return text_color_tuple # Se for uma string única
+        except Exception:
+            return "black" if ctk.get_appearance_mode() == "Light" else "white" # Fallback
+
+            
+    def _recreate_canvas(self):
+        """Helper para recriar o canvas e a toolbar. (TESTE DRÁSTICO)"""
+        print("[DEBUG RECREATE_CANVAS] Tentando recriar FigureCanvasTkAgg e Toolbar...")
         
-        # Chamadas iniciais adiadas
-        self.master.after(10, self._on_include_component_change) 
-        self.master.after(50, self._trigger_realtime_plot_update) 
+        # Destruir widgets antigos se existirem
+        if hasattr(self, 'canvas_main_plot') and self.canvas_main_plot and hasattr(self.canvas_main_plot, 'get_tk_widget'):
+            tk_widget = self.canvas_main_plot.get_tk_widget()
+            if tk_widget: # Verifica se o widget ainda existe antes de chamar destroy
+                tk_widget.destroy()
+                print("[DEBUG RECREATE_CANVAS] Widget do canvas antigo destruído.")
+        self.canvas_main_plot = None 
 
+        if hasattr(self, 'toolbar_main_plot') and self.toolbar_main_plot:
+            self.toolbar_main_plot.destroy()
+            print("[DEBUG RECREATE_CANVAS] Toolbar antiga destruída.")
+        self.toolbar_main_plot = None
 
-    def _on_parameter_change(self, event=None, from_combobox_value=None): # Renomeado
-        self._trigger_realtime_plot_update(from_combobox_value=from_combobox_value)
+        if not self.fig_main_plot or not self.ax_main_plot: # Garante que a figura e o eixo base existam
+            print("[DEBUG RECREATE_CANVAS] Recriando fig_main_plot e ax_main_plot pois não existiam ou foram invalidados.")
+            self.fig_main_plot = Figure(figsize=(5, 4), dpi=100)
+            self.ax_main_plot = self.fig_main_plot.add_subplot(111)
 
-    def _on_formatting_change(self, event_or_choice=None): # Renomeado
-        if self.results_text.get("1.0", "end-1c").strip():
-             self.analyze_circuit()
+        self.canvas_main_plot = FigureCanvasTkAgg(self.fig_main_plot, master=self.plot_container_frame)
+        canvas_widget = self.canvas_main_plot.get_tk_widget()
+        canvas_widget.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
-    def _on_include_component_change(self, event=None): # NOVO
+        self.toolbar_main_plot = NavigationToolbar2Tk(self.canvas_main_plot, self.plot_container_frame, pack_toolbar=False)
+        self.toolbar_main_plot.update()
+        self.toolbar_main_plot.grid(row=1, column=0, sticky="ew", padx=2, pady=(0,2))
+        print("[DEBUG RECREATE_CANVAS] Novo canvas e toolbar criados e posicionados.")
+
+    def _calculate_equivalent_series(self, values):
+        if not values: return 0.0
+        return sum(values)
+
+    def _calculate_equivalent_parallel(self, values):
+        if not values: return 0.0
+        sum_inverses = 0.0
+        for v in values:
+            if v > 1e-12: sum_inverses += 1.0 / v
+            else: return 0.0
+        if sum_inverses > 1e-12: return 1.0 / sum_inverses
+        else: return float('inf')
+
+    def _calculate_capacitors_parallel(self, values):
+        if not values: return 0.0
+        return sum(values)
+
+    def _calculate_capacitors_series(self, values):
+        if not values: return 0.0
+        sum_inverses_c = 0.0
+        for v in values:
+            if v > 1e-12: sum_inverses_c += 1.0 / v
+            else: return 0.0
+        if sum_inverses_c > 1e-12: return 1.0 / sum_inverses_c
+        else: return float('inf')
+
+    def _parse_and_apply_netlist(self):
+        netlist_content = self.netlist_textbox.get("1.0", tk.END).strip()
+        if not netlist_content: messagebox.showinfo("Netlist", "A área de netlist está vazia."); return
+        parsed_components={'R':[],'L':[],'C':[]}; v_mag,v_phase=None,None; freq_details_from_netlist=None; topology_from_netlist=None; error_log=[]
+        vs_pattern=re.compile(r"VS\s+\w+\s+\w+\s+AC\s+([\d\.]+)\s*([\d\.]*)",re.IGNORECASE); comp_pattern=re.compile(r"([RCL])([A-Z0-9_]*)\s+(\w+)\s+(\w+)\s+([\d\.eE\-+]+)",re.IGNORECASE)
+        topo_pattern=re.compile(r"TOPOLOGIA\s+(SERIE|PARALELO)",re.IGNORECASE); freq_det_pattern=re.compile(r"FREQ_DETALHES\s+([\d\.]+)",re.IGNORECASE); source_defined=False
+        for l_num,line in enumerate(netlist_content.splitlines(),1):
+            line=line.strip().upper(); L=f"L{l_num}: "
+            if not line or line.startswith("#") or line.startswith("*"): continue
+            m_vs=vs_pattern.match(line); m_comp=comp_pattern.match(line); m_topo=topo_pattern.match(line); m_freq=freq_det_pattern.match(line)
+            if m_vs:
+                if source_defined: error_log.append(L+"Múltiplas VS."); continue
+                try: v_mag=float(m_vs.group(1)); v_phase=float(m_vs.group(2)) if m_vs.group(2) else 0.0; source_defined=True
+                except ValueError: error_log.append(L+"Valor VS inválido."); continue
+            elif m_comp:
+                try: val=float(m_comp.group(5));parsed_components[m_comp.group(1)].append(val)
+                except ValueError: error_log.append(L+f"Valor {m_comp.group(1)} inválido."); continue
+                if val<0: error_log.append(L+f"Valor {m_comp.group(1)}<0."); continue
+            elif m_topo:
+                if topology_from_netlist: error_log.append(L+"Múltiplas TOPOLOGIA."); continue
+                topology_from_netlist=m_topo.group(1).capitalize()
+            elif m_freq:
+                if freq_details_from_netlist: error_log.append(L+"Múltiplas FREQ_DETALHES."); continue
+                try: freq_val=float(m_freq.group(1)); freq_details_from_netlist=freq_val
+                except ValueError: error_log.append(L+"Valor FREQ_DETALHES inválido."); continue
+                if freq_val<=0: error_log.append(L+"FREQ_DETALHES<=0."); freq_details_from_netlist=None; continue
+            else: error_log.append(L+f"Sintaxe: {line}")
+        if not source_defined and not any(parsed_components.values()): error_log.append("Nenhuma fonte ou componente.")
+        if error_log: messagebox.showerror("Erro Netlist","\n".join(error_log)); return
+        r_eq,l_eq,c_eq=0.0,0.0,0.0; eff_topo=topology_from_netlist or self.circuit_topology_var.get()
+        if parsed_components['R']: r_eq=self._calculate_equivalent_series(parsed_components['R']) if eff_topo=="Série" else self._calculate_equivalent_parallel(parsed_components['R'])
+        if parsed_components['L']: l_eq=self._calculate_equivalent_series(parsed_components['L']) if eff_topo=="Série" else self._calculate_equivalent_parallel(parsed_components['L'])
+        if parsed_components['C']: c_eq=self._calculate_capacitors_series(parsed_components['C']) if eff_topo=="Série" else self._calculate_capacitors_parallel(parsed_components['C'])
+        if v_mag is not None: self.v_mag_entry.delete(0,tk.END); self.v_mag_entry.insert(0,str(v_mag))
+        if v_phase is not None: self.v_phase_entry.delete(0,tk.END); self.v_phase_entry.insert(0,str(v_phase))
+        self.include_r_var.set(bool(parsed_components['R'])and r_eq!=float('inf')); self.r_entry.delete(0,tk.END); self.r_entry.insert(0,self._format_value_for_entry(r_eq if r_eq!=float('inf')else 0.0))
+        self.include_l_var.set(bool(parsed_components['L'])and l_eq!=float('inf')); self.l_entry.delete(0,tk.END); self.l_entry.insert(0,self._format_value_for_entry(l_eq if l_eq!=float('inf')else 0.0))
+        self.include_c_var.set(bool(parsed_components['C'])and c_eq!=float('inf')); self.c_entry.delete(0,tk.END); self.c_entry.insert(0,self._format_value_for_entry(c_eq if c_eq!=float('inf')else 0.0))
+        if topology_from_netlist: self.circuit_topology_var.set(topology_from_netlist)
+        if freq_details_from_netlist: self.freq_details_entry.delete(0,tk.END); self.freq_details_entry.insert(0,str(freq_details_from_netlist))
+        self._on_include_component_change(); self._on_parameter_change(); messagebox.showinfo("Netlist Processada","Netlist aplicada.")
+
+    def _format_value_for_entry(self, value, precision=6):
+        if value == float('inf'): return "inf"
+        if abs(value) < 1e-9 and value != 0: return f"{value:.{precision}e}"
+        if abs(value) > 1e7: return f"{value:.{precision}e}"
+        formatted_val = f"{value:.{precision}g}" 
+        if 'e' not in formatted_val and '.' in formatted_val and len(formatted_val.split('.')[1]) > precision + 2 and value !=0:
+            return f"{value:.{precision}e}" if abs(value) < 1e-4 else f"{value:.{precision}f}".rstrip('0').rstrip('.')
+        return formatted_val
+
+    def _on_parameter_change(self, event=None, from_combobox_value=None):
+        self.analysis_performed_successfully = False
+
+    def _on_formatting_change(self, event_or_choice=None):
+        if self.results_text.get("1.0", "end-1c").strip() and self.analysis_performed_successfully:
+             self.analyze_circuit() 
+
+    def _on_include_component_change(self, event=None):
         self.r_entry.configure(state="normal" if self.include_r_var.get() else "disabled")
-        if not self.include_r_var.get() and self.r_entry.get() != "0": 
-            self.r_entry.delete(0,tk.END); self.r_entry.insert(0,"0")
-        
         self.l_entry.configure(state="normal" if self.include_l_var.get() else "disabled")
-        if not self.include_l_var.get() and self.l_entry.get() != "0": 
-            self.l_entry.delete(0,tk.END); self.l_entry.insert(0,"0")
-
         self.c_entry.configure(state="normal" if self.include_c_var.get() else "disabled")
-        if not self.include_c_var.get() and self.c_entry.get() != "0":
-            self.c_entry.delete(0,tk.END); self.c_entry.insert(0,"0")
-        
-        # Só chama o trigger se o __init__ já completou a criação de todos os widgets de varredura
-        if hasattr(self, 'freq_start_entry'): # Uma verificação simples
-            self._trigger_realtime_plot_update()
+        self.analysis_performed_successfully = False
 
     def _format_value(self, value, unit=""):
         if isinstance(value, str): return f"{value} {unit}".strip()
-        if not isinstance(value, (int, float)): return f"{str(value)} {unit}".strip() 
-        if math.isinf(value): return f"Infinito {unit}".strip()
-        if math.isnan(value): return f"Indefinido {unit}".strip()
+        if not isinstance(value, (int, float, complex)): return f"{str(value)} {unit}".strip()
+        if isinstance(value, complex):
+            if math.isinf(value.real) or math.isinf(value.imag) or math.isnan(value.real) or math.isnan(value.imag): return f"Indefinido/Infinito {unit}".strip()
+            value_to_format = abs(value)
+        else: value_to_format = value
+        if math.isinf(value_to_format): return f"Infinito {unit}".strip()
+        if math.isnan(value_to_format): return f"Indefinido {unit}".strip()
         try: dp = int(self.decimal_places_var.get())
-        except ValueError: dp = 3 
-        fmt_string = ""
-        use_sci = self.scientific_notation_var.get()
-        if use_sci: fmt_string = f"{{:.{dp}e}}"
-        else:
-            if abs(value) >= 1e7 or (abs(value) < 1e-4 and value != 0): fmt_string = f"{{:.{dp}e}}"
-            else: fmt_string = f"{{:.{dp}f}}"
-        if use_sci: fmt_string = f"{{:.{dp}e}}"
-        return f"{fmt_string.format(value)} {unit}".strip()
+        except ValueError: dp = 3
+        fmt_string = f"{{:.{dp}e}}" if self.scientific_notation_var.get() or (abs(value_to_format) >= 1e7 or (abs(value_to_format) < 1e-4 and value_to_format != 0)) else f"{{:.{dp}f}}"
+        try: return f"{fmt_string.format(value_to_format)} {unit}".strip()
+        except: return f"{value_to_format:.{dp}e} {unit}".strip()
 
     def save_configuration(self):
-        selected_magnitudes_to_save = {name: var.get() for name, var in self.magnitude_plot_vars.items()}
         config_data = {
             'r_val': self.r_entry.get(), 'l_val': self.l_entry.get(), 'c_val': self.c_entry.get(),
             'include_r': self.include_r_var.get(), 'include_l': self.include_l_var.get(), 'include_c': self.include_c_var.get(),
             'v_mag': self.v_mag_entry.get(), 'v_phase_deg': self.v_phase_entry.get(),
             'freq_details': self.freq_details_entry.get(),
             'angle_unit': self.angle_unit.get(), 'topology': self.circuit_topology_var.get(),
-            'freq_start': self.freq_start_entry.get(), 'freq_end': self.freq_end_entry.get(),
-            'num_points': self.num_points_entry.get(), 
-            'magnitude_plots': selected_magnitudes_to_save, 
-            'phase_plot': self.selected_phase_plot_var.get(),
-            'decimal_places': self.decimal_places_var.get(), 
-            'scientific_notation': self.scientific_notation_var.get()
+            'decimal_places': self.decimal_places_var.get(),
+            'scientific_notation': self.scientific_notation_var.get(),
+            'netlist_content': self.netlist_textbox.get("1.0", tk.END).strip(),
+            'fp_desired': self.fp_desired_entry.get()
         }
         try:
-            fp = filedialog.asksaveasfilename(defaultextension=".json",filetypes=[("JSON","*.json"),("All","*.*")],title="Salvar Config.")
-            if fp:
-                with open(fp,'w') as f: json.dump(config_data,f,indent=4)
+            fp_path = filedialog.asksaveasfilename(defaultextension=".json",filetypes=[("JSON","*.json"),("All","*.*")],title="Salvar Config.")
+            if fp_path:
+                with open(fp_path,'w') as f: json.dump(config_data,f,indent=4)
                 messagebox.showinfo("Salvar","Configuração salva!")
         except Exception as e: messagebox.showerror("Erro Salvar",f"Erro: {e}")
 
     def load_configuration(self):
         try:
-            fp = filedialog.askopenfilename(defaultextension=".json",filetypes=[("JSON","*.json"),("All","*.*")],title="Carregar Config.")
-            if fp:
-                with open(fp,'r') as f: ld=json.load(f)
+            fp_path = filedialog.askopenfilename(defaultextension=".json",filetypes=[("JSON","*.json"),("All","*.*")],title="Carregar Config.")
+            if fp_path:
+                with open(fp_path,'r') as f: ld=json.load(f)
                 self.r_entry.delete(0,tk.END); self.r_entry.insert(0,ld.get('r_val',"10"))
                 self.l_entry.delete(0,tk.END); self.l_entry.insert(0,ld.get('l_val',"0.01"))
                 self.c_entry.delete(0,tk.END); self.c_entry.insert(0,ld.get('c_val',"0.00001"))
-                self.include_r_var.set(ld.get('include_r', True))
-                self.include_l_var.set(ld.get('include_l', True))
-                self.include_c_var.set(ld.get('include_c', True))
-                self._on_include_component_change() 
-
+                self.include_r_var.set(ld.get('include_r', True)); self.include_l_var.set(ld.get('include_l', True)); self.include_c_var.set(ld.get('include_c', True))
+                self._on_include_component_change()
                 self.v_mag_entry.delete(0,tk.END); self.v_mag_entry.insert(0,ld.get('v_mag',"10"))
                 self.v_phase_entry.delete(0,tk.END); self.v_phase_entry.insert(0,ld.get('v_phase_deg',"0"))
                 self.freq_details_entry.delete(0,tk.END); self.freq_details_entry.insert(0,ld.get('freq_details',"159"))
                 self.angle_unit.set(ld.get('angle_unit',"degrees")); self.circuit_topology_var.set(ld.get('topology',"Série"))
-                self.freq_start_entry.delete(0,tk.END); self.freq_start_entry.insert(0,ld.get('freq_start',"50"))
-                self.freq_end_entry.delete(0,tk.END); self.freq_end_entry.insert(0,ld.get('freq_end',"1000"))
-                self.num_points_entry.delete(0,tk.END); self.num_points_entry.insert(0,ld.get('num_points',"300"))
-                
-                loaded_mag_plots = ld.get('magnitude_plots', {"|Z_total|": True})
-                for name, var_obj in self.magnitude_plot_vars.items():
-                    var_obj.set(loaded_mag_plots.get(name, False if name != "|Z_total|" else True))
-                
-                self.selected_phase_plot_var.set(ld.get('phase_plot', self.phase_plot_options[0]))
-                
                 self.decimal_places_var.set(ld.get('decimal_places',"3")); self.scientific_notation_var.set(ld.get('scientific_notation',False))
+                self.netlist_textbox.delete("1.0", tk.END); self.netlist_textbox.insert("1.0", ld.get('netlist_content', "# Insira netlist"))
+                self.fp_desired_entry.delete(0, tk.END); self.fp_desired_entry.insert(0, ld.get('fp_desired', ""))
                 messagebox.showinfo("Carregar","Configuração carregada!")
-                self._trigger_realtime_plot_update(); 
-                # self.analyze_circuit() 
-        except FileNotFoundError: messagebox.showerror("Erro Carregar","Arquivo não encontrado.")
-        except json.JSONDecodeError: messagebox.showerror("Erro Carregar","Arquivo inválido.")
+                self._on_parameter_change(); self.analysis_performed_successfully = False
+                self._clear_main_plot(initial_message="Diagrama Fasorial: Configuração carregada, analise novamente.")
         except Exception as e: messagebox.showerror("Erro Carregar",f"Erro: {e}")
-    
+
     def _set_entry_error_style(self, entry_key, is_error=True):
         if entry_key in self.entry_widgets:
             widget=self.entry_widgets[entry_key]
-            try: 
+            try:
                 dcs=ctk.ThemeManager.theme["CTkEntry"]["border_color"]; cm=ctk.get_appearance_mode().lower()
                 nc=dcs[0] if isinstance(dcs,list) and cm=="light" else (dcs[1] if isinstance(dcs,list) else dcs)
                 if nc is None: nc="#979797" if cm=="light" else "#565B5E"
             except: nc="gray50"
             tc=self.error_border_color if is_error else nc
-            if isinstance(widget.cget("border_color"),list): widget.configure(border_color=[tc,tc])
-            else: widget.configure(border_color=tc)
-    
+            current_border_color = widget.cget("border_color")
+            if isinstance(current_border_color, (list, tuple)) and len(current_border_color) == 2: widget.configure(border_color=[tc,tc])
+            elif isinstance(current_border_color, str): widget.configure(border_color=tc)
+
     def _clear_all_entry_error_styles(self):
         for wk in self.entry_widgets: self._set_entry_error_style(wk,is_error=False)
 
-    def _validate_all_parameters(self, silent=True, check_detail_freq=False):
+    def _validate_all_parameters(self, silent=True):
         self._clear_all_entry_error_styles(); params={}; error_messages=[]; error_fields=[]
-        def gf(ew,pn,hn,include_var):
-            if include_var is not None and not include_var.get(): params[pn]=0.0; return 0.0 
-            try: v=float(ew.get());params[pn]=v;return v
-            except ValueError: error_messages.append(f"{hn} inválido(a)."); error_fields.append(pn); return None
-        def gi(ew,pn,hn):
-            try: v=int(ew.get());params[pn]=v;return v
-            except ValueError: error_messages.append(f"{hn} inválido(a)."); error_fields.append(pn); return None
-        
+        def gf(ew,pn,hn,include_var,is_optional=False):
+            val_str=ew.get()
+            if is_optional and not val_str: params[pn]=None; return None
+            if include_var is not None and not include_var.get(): params[pn]=0.0; return 0.0
+            try: v=float('inf') if val_str.lower()=='inf' else float(val_str); params[pn]=v; return v
+            except ValueError:
+                if not is_optional and (include_var is None or include_var.get()): error_messages.append(f"{hn} inválido(a)."); error_fields.append(pn)
+                params[pn]=0.0 if not is_optional else None; return None
         params['topology']=self.circuit_topology_var.get()
-        gf(self.r_entry,'r_val',"Resistor (R)", self.include_r_var)
-        gf(self.l_entry,'l_val',"Indutor (L)", self.include_l_var)
-        gf(self.c_entry,'c_val',"Capacitor (C)", self.include_c_var)
-        gf(self.v_mag_entry,'v_mag',"Tensão Fonte (Vmag)", None)
-        gf(self.v_phase_entry,'v_phase_deg',"Fase Fonte (θv)", None)
-
-        if self.include_r_var.get() and 'r_val' in params:
-            if params['r_val']<0:error_messages.append("R não pode ser negativo.");error_fields.append('r_val')
-            if params['r_val']==0 and params['topology']=="Paralelo" and not silent:error_messages.append("Atenção: R=0 em paralelo é curto.");error_fields.append('r_val')
-        if self.include_l_var.get() and 'l_val' in params and params['l_val']<0:error_messages.append("L não pode ser negativo.");error_fields.append('l_val')
-        if self.include_c_var.get() and 'c_val' in params and params['c_val']<0:error_messages.append("C não pode ser negativo.");error_fields.append('c_val')
-        if 'v_mag' in params and params['v_mag']<0:error_messages.append("Vmag não pode ser negativa.");error_fields.append('v_mag')
-        
-        gf(self.freq_start_entry,'freq_start',"Frequência Inicial", None)
-        gf(self.freq_end_entry,'freq_end',"Frequência Final", None)
-        gi(self.num_points_entry,'num_points',"Número de Pontos")
-        
-        params['selected_magnitude_plots'] = [name for name, var in self.magnitude_plot_vars.items() if var.get()]
-        params['selected_phase_plot'] = self.selected_phase_plot_var.get()
-        if not params['selected_magnitude_plots'] and params['selected_phase_plot'] == "Nenhuma":
-            error_messages.append("Selecione ao menos uma grandeza para plotar.")
-            
-        if 'freq_start' in params and params['freq_start']<=0:error_messages.append("Freq. Inicial > 0.");error_fields.append('freq_start')
-        if 'freq_end' in params and 'freq_start' in params and params.get('freq_start') is not None and params['freq_end']<=params['freq_start']:error_messages.append("Freq. Final > Freq. Inicial.");error_fields.append('freq_end')
-        if 'num_points' in params and params['num_points']<2:error_messages.append("Nº Pontos >= 2.");error_fields.append('num_points')
-        
-        params['freq_details']=None
-        if check_detail_freq:
-            fds=self.freq_details_entry.get()
-            if fds:
-                dfv=gf(self.freq_details_entry,'freq_details_val',"Freq. para Detalhes", None) # include_var=None
-                if dfv is not None:
-                    if dfv<=0:error_messages.append("Freq. para Detalhes > 0.");error_fields.append('freq_details')
-                    else:params['freq_details']=dfv
-        
-        for fk in set(error_fields):self._set_entry_error_style(fk,is_error=True)
+        gf(self.r_entry,'r_val',"R_eq",self.include_r_var); gf(self.l_entry,'l_val',"L_eq",self.include_l_var); gf(self.c_entry,'c_val',"C_eq",self.include_c_var)
+        gf(self.v_mag_entry,'v_mag',"Vmag",None); gf(self.v_phase_entry,'v_phase_deg',"Fase Fonte",None)
+        if params.get('r_val') is not None and params['r_val']<0 and self.include_r_var.get(): error_messages.append("R_eq >=0."); error_fields.append('r_val')
+        if params.get('l_val') is not None and params['l_val']<0 and self.include_l_var.get(): error_messages.append("L_eq >=0."); error_fields.append('l_val')
+        if params.get('c_val') is not None and params['c_val']<0 and self.include_c_var.get(): error_messages.append("C_eq >=0."); error_fields.append('c_val')
+        if params.get('v_mag') is not None and params['v_mag']<0: error_messages.append("Vmag >=0."); error_fields.append('v_mag')
+        params['freq_details']=None; fds_val=gf(self.freq_details_entry,'freq_details_val',"Freq. Análise",None)
+        if fds_val is not None and fds_val<=0: error_messages.append("Freq. Análise >0."); error_fields.append('freq_details')
+        elif fds_val is not None: params['freq_details']=fds_val
+        for fk in set(error_fields): self._set_entry_error_style(fk,True)
         if error_messages:
-            uems=list(dict.fromkeys(error_messages))
-            if not silent:messagebox.showerror("Erro Entrada","\n".join(uems))
-            return None,uems
+            if not silent: messagebox.showerror("Erro Entrada","\n".join(list(dict.fromkeys(error_messages))))
+            return None,list(dict.fromkeys(error_messages))
         return params,None
 
-    def _calculate_sweep_data(self, params):
-        f0_resonance=None; topology=params.get('topology',"Série")
-        r_val = params.get('r_val',0) if self.include_r_var.get() else 0.0
-        l_val = params.get('l_val',0) if self.include_l_var.get() else 0.0
-        c_val = params.get('c_val',0) if self.include_c_var.get() else 0.0
-
-        if l_val>1e-12 and c_val>1e-12: 
-            try: f0_resonance=1/(2*math.pi*math.sqrt(l_val*c_val))
-            except ZeroDivisionError: f0_resonance=None
-        
-        freq_start=params.get('freq_start',1); freq_end=params.get('freq_end',1000); num_points=params.get('num_points',100)
-        if freq_end > freq_start and freq_start > 0 :
-             if freq_end / freq_start > 100:
-                try: frequencies = np.logspace(np.log10(freq_start), np.log10(freq_end), num_points)
-                except ValueError: frequencies = np.linspace(freq_start, freq_end, num_points)
-             else: frequencies = np.linspace(freq_start, freq_end, num_points)
-        else: frequencies = np.linspace(1, 1000, 100)
-            
-        all_plot_data_y = {} 
-        for name in params['selected_magnitude_plots']: all_plot_data_y[name] = []
-        if params['selected_phase_plot'] != "Nenhuma": all_plot_data_y[params['selected_phase_plot']] = []
-
-        v_phase_rad=math.radians(params.get('v_phase_deg',0)); v_source_phasor_fixed=cmath.rect(params.get('v_mag',0),v_phase_rad)
-        
-        for freq_current in frequencies:
-            z_r = complex(r_val,0) if self.include_r_var.get() and r_val>1e-12 else \
-                  (complex(1e-12,0) if topology=="Paralelo" and self.include_r_var.get() and r_val<=1e-12 else complex(0,0))
-            if not self.include_r_var.get(): z_r = complex(float('inf'),0) if topology=="Paralelo" else complex(0,0)
-
-            z_l = complex(0,2*cmath.pi*freq_current*l_val) if self.include_l_var.get() and l_val>1e-12 and freq_current>1e-12 else complex(0,0)
-            if not self.include_l_var.get(): z_l = complex(float('inf'),0) if topology=="Paralelo" else complex(0,0)
-            
-            z_c = complex(0,-1/(2*cmath.pi*freq_current*c_val)) if self.include_c_var.get() and c_val>1e-12 and freq_current>1e-12 else complex(float('inf'),0)
-            if not self.include_c_var.get(): z_c = complex(float('inf'),0)
-
-            z_total_sweep,i_total_sweep_source=complex(0,0),complex(0,0)
-            v_r_calc,v_l_calc,v_c_calc=complex(0,0),complex(0,0),complex(0,0)
-
-            if topology=="Série":
-                z_total_sweep = z_r + z_l + z_c 
-                if abs(z_total_sweep)<1e-12: i_total_sweep_source=v_source_phasor_fixed/(1e-12+0j) if abs(v_source_phasor_fixed)>1e-12 else complex(0,0)
-                elif abs(z_total_sweep)==float('inf'): i_total_sweep_source=complex(0,0)
-                else: i_total_sweep_source=v_source_phasor_fixed/z_total_sweep
-                
-                v_r_calc=i_total_sweep_source*z_r if self.include_r_var.get() else complex(0,0)
-                v_l_calc=i_total_sweep_source*z_l if self.include_l_var.get() else complex(0,0)
-                if self.include_c_var.get():
-                    v_c_calc=i_total_sweep_source*z_c if abs(z_c)!=float('inf') else \
-                             (v_source_phasor_fixed-v_r_calc-v_l_calc if abs(i_total_sweep_source)<1e-9 else complex(0,0) )
-                else: v_c_calc = complex(0,0)
-            
-            elif topology=="Paralelo":
-                y_r=1/z_r if self.include_r_var.get() and abs(z_r)>1e-12 else complex(0,0) 
-                y_l=1/z_l if self.include_l_var.get() and abs(z_l)>1e-12 else complex(0,0)
-                y_c=1/z_c if self.include_c_var.get() and abs(z_c)>1e-12 and abs(z_c)!=float('inf') else complex(0,0)
-                     
-                y_total_sweep=y_r+y_l+y_c
-                z_total_sweep=1/y_total_sweep if abs(y_total_sweep)>1e-12 else complex(float('inf'),0)
-                i_total_sweep_source=v_source_phasor_fixed*y_total_sweep
-                v_r_calc=v_l_calc=v_c_calc=v_source_phasor_fixed
-            
-            temp_val_map = {
-                "|Z_total|": abs(z_total_sweep),
-                "|I_total|": abs(i_total_sweep_source),
-                "|V_R|": abs(v_r_calc) if self.include_r_var.get() else np.nan,
-                "|V_L|": abs(v_l_calc) if self.include_l_var.get() else np.nan,
-                "|V_C|": abs(v_c_calc) if self.include_c_var.get() else np.nan,
-                "Fase(Z_total) (°)": math.degrees(cmath.phase(z_total_sweep)) if abs(z_total_sweep)!=float('inf') and abs(z_total_sweep)>1e-12 else 0.0,
-                "Fase(I_total) (°)": math.degrees(cmath.phase(i_total_sweep_source)) if abs(i_total_sweep_source)>1e-12 else 0.0,
-                "Fase(V_R) (°)": math.degrees(cmath.phase(v_r_calc)) if self.include_r_var.get() and abs(v_r_calc)>1e-12 else 0.0,
-                "Fase(V_L) (°)": math.degrees(cmath.phase(v_l_calc)) if self.include_l_var.get() and abs(v_l_calc)>1e-12 else 0.0,
-                "Fase(V_C) (°)": math.degrees(cmath.phase(v_c_calc)) if self.include_c_var.get() and abs(v_c_calc)>1e-12 else 0.0,
-            }
-            for name in all_plot_data_y.keys():
-                if name in temp_val_map:
-                    all_plot_data_y[name].append(temp_val_map[name])
-                elif len(all_plot_data_y[name]) < len(frequencies): 
-                     all_plot_data_y[name].append(np.nan)
-        return frequencies, all_plot_data_y, f0_resonance
-
-    def _trigger_realtime_plot_update(self, event=None, from_combobox_value=None):
-        params, errors = self._validate_all_parameters(silent=True, check_detail_freq=False)
-        if params:
-            try:
-                self.results_text.configure(state="normal"); self.results_text.delete("1.0", "end")
-                self.results_text.insert("1.0", f"Atualizando gráfico..."); self.results_text.configure(state="disabled")
-                self.master.update_idletasks()
-
-                frequencies, all_plot_data_y, f0_calc = self._calculate_sweep_data(params)
-                
-                extremum_info_for_plot = None
-                if params['selected_magnitude_plots']:
-                    first_mag_plot = params['selected_magnitude_plots'][0]
-                    if first_mag_plot in all_plot_data_y and all_plot_data_y[first_mag_plot]:
-                        valid_data_for_extremum = [v for v in all_plot_data_y[first_mag_plot] if not np.isnan(v)]
-                        if valid_data_for_extremum:
-                             extremum_info_for_plot = self._find_extremum(frequencies, all_plot_data_y[first_mag_plot], first_mag_plot, params['topology'])
-
-                self._update_embedded_plot(frequencies, all_plot_data_y, params, f0_resonance=f0_calc, extremum_info_main=extremum_info_for_plot)
-                
-                self.results_text.configure(state="normal"); self.results_text.delete("1.0", "end")
-                plotted_vars_str = ", ".join(params['selected_magnitude_plots'])
-                if params['selected_phase_plot'] != "Nenhuma":
-                    if plotted_vars_str: plotted_vars_str += " & "
-                    plotted_vars_str += params['selected_phase_plot']
-                self.results_text.insert("1.0", f"Gráfico ({params['topology']}) atualizado: {plotted_vars_str or 'Nenhuma'}.\n(Pressione 'Analisar e Plotar' para resultados textuais)")
-                self.results_text.configure(state="disabled")
-            except Exception as e:
-                print(f"Erro RT plot: {e}"); import traceback; traceback.print_exc()
-                self._clear_embedded_plot(error_message="Erro ao atualizar gráfico.") 
-        else:
-            self._clear_embedded_plot(error_message=f"Parâmetros inválidos:\n{', '.join(errors if errors else [])}")
-    
-    def _find_extremum(self, frequencies, data_y_single_series, plot_choice_single, topology):
-        if not data_y_single_series or not isinstance(data_y_single_series,(list, np.ndarray)) or len(data_y_single_series)==0: return None
-        valid_data_points = [(freq, val) for freq, val in zip(frequencies, data_y_single_series) 
-                             if isinstance(val,(int,float)) and not (math.isinf(val) or math.isnan(val))]
-        if not valid_data_points: return None
-        
-        temp_frequencies, temp_valid_data_y = zip(*valid_data_points)
-
-        extremum_type,extremum_value_raw,extremum_freq = None,None,None 
-        if "|" in plot_choice_single: 
-            if topology=="Série":
-                if "Z_total" in plot_choice_single: extremum_type="min"
-                else: extremum_type="max" 
-            elif topology=="Paralelo":
-                if "I_total" in plot_choice_single: extremum_type="min" 
-                elif "Z_total" in plot_choice_single: extremum_type="max" 
-                else: extremum_type="max" 
-            
-            if extremum_type=="min": extremum_value_raw=min(temp_valid_data_y) if temp_valid_data_y else None
-            elif extremum_type=="max": extremum_value_raw=max(temp_valid_data_y) if temp_valid_data_y else None
-            else: return None 
-            
-            if extremum_value_raw is None: return None
-            try:
-                extremum_idx_in_valid = temp_valid_data_y.index(extremum_value_raw)
-                extremum_freq = temp_frequencies[extremum_idx_in_valid]
-                
-                unit_base=""
-                if "Z_total" in plot_choice_single: unit_base="Ω"
-                elif "I_total" in plot_choice_single: unit_base="A"
-                elif "V_" in plot_choice_single: unit_base="V"
-                extremum_value_formatted=self._format_value(extremum_value_raw,unit_base)
-                return extremum_type,extremum_freq,extremum_value_raw,extremum_value_formatted
-            except (ValueError,IndexError): return None
-        return None
-            
-    def _clear_embedded_plot(self, error_message=None): 
-        if self.ax_embedded: self.ax_embedded.clear()
-        if hasattr(self,'ax2_embedded') and self.ax2_embedded and self.ax2_embedded.figure : 
-            self.ax2_embedded.clear(); self.ax2_embedded.set_visible(False)
-        if error_message:
-            fontsize=9 if len(error_message)<70 else 7
-            self.ax_embedded.text(0.5,0.5,error_message,ha='center',va='center',fontsize=fontsize,color='red',wrap=True)
-            self.ax_embedded.set_title("Erro de Plotagem",fontsize=10)
-        else: self.ax_embedded.set_title("Aguardando Análise / Configuração",fontsize=10)
-        self.ax_embedded.set_xlabel("Frequência (Hz)",fontsize=9); self.ax_embedded.set_ylabel("Magnitude",fontsize=9)
-        self.ax_embedded.grid(True,which="both",linestyle="--",linewidth=0.5)
-        self.ax_embedded.tick_params(axis='both',which='major',labelsize=8)
-        self.ax_embedded.set_xscale('linear'); self.ax_embedded.set_yscale('linear')
-        if self.fig_embedded: 
-            try: self.fig_embedded.tight_layout(pad=0.5)
-            except Exception: 
-                try: self.fig_embedded.subplots_adjust(left=0.15,bottom=0.20,right=0.85 if self.ax2_embedded and self.ax2_embedded.get_visible() else 0.95,top=0.90)
-                except Exception:pass
-        if self.canvas_embedded: self.canvas_embedded.draw()
-            
     def clear_entries(self):
         self._clear_all_entry_error_styles()
-        self.r_entry.delete(0,"end"); self.r_entry.insert(0,"10") 
-        self.l_entry.delete(0,"end"); self.l_entry.insert(0,"0.01")
-        self.c_entry.delete(0,"end"); self.c_entry.insert(0,"0.00001")
-        self.include_r_var.set(True); self.include_l_var.set(True); self.include_c_var.set(True)
-        self._on_include_component_change()
-        self.v_mag_entry.delete(0,"end"); self.v_mag_entry.insert(0,"10")
-        self.v_phase_entry.delete(0,"end"); self.v_phase_entry.insert(0,"0")
-        self.freq_details_entry.delete(0,"end"); self.freq_details_entry.insert(0,"159") 
-        self.freq_start_entry.delete(0,"end"); self.freq_start_entry.insert(0,"50")
-        self.freq_end_entry.delete(0,"end"); self.freq_end_entry.insert(0,"1000")
-        self.num_points_entry.delete(0,"end"); self.num_points_entry.insert(0,"300")
-        for name, var in self.magnitude_plot_vars.items(): var.set(True if name == "|Z_total|" else False)
-        self.selected_phase_plot_var.set(self.phase_plot_options[0])
-        self.angle_unit.set("degrees"); self.circuit_topology_var.set("Série")
-        self.decimal_places_var.set("3"); self.scientific_notation_var.set(False)
+        self.r_entry.delete(0,"end"); self.r_entry.insert(0,"10"); self.l_entry.delete(0,"end"); self.l_entry.insert(0,"0.01"); self.c_entry.delete(0,"end"); self.c_entry.insert(0,"0.00001")
+        self.include_r_var.set(True); self.include_l_var.set(True); self.include_c_var.set(True); self._on_include_component_change()
+        self.v_mag_entry.delete(0,"end"); self.v_mag_entry.insert(0,"10"); self.v_phase_entry.delete(0,"end"); self.v_phase_entry.insert(0,"0")
+        self.freq_details_entry.delete(0,"end"); self.freq_details_entry.insert(0,"159"); self.fp_desired_entry.delete(0,tk.END)
+        self.angle_unit.set("degrees"); self.circuit_topology_var.set("Série"); self.decimal_places_var.set("3"); self.scientific_notation_var.set(False) 
+        self.netlist_textbox.delete("1.0",tk.END); self.netlist_textbox.insert("1.0","# Exemplo Netlist RLC Série:\n# VS 1 0 AC 10 0\n# R1 1 2 10\n# L1 2 3 0.01\n# C1 3 0 1e-5\n# TOPOLOGIA SERIE\n# FREQ_DETALHES 159\n")
         self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self.results_text.configure(state="disabled")
-        self._trigger_realtime_plot_update()
+        self._clear_main_plot(initial_message="Diagrama Fasorial: Selecione parâmetros e analise.")
+        self._clear_static_circuit_diagram(initial_message="Diagrama do Circuito: Entradas limpas.")
+        self._on_parameter_change(); self.analysis_performed_successfully=False
+
+    def _grab_toplevel_safely(self, toplevel_window):
+        if toplevel_window and toplevel_window.winfo_exists():
+            try: toplevel_window.grab_set()
+            except tk.TclError: pass 
 
     def show_about_dialog_ctk(self):
-        if self.about_dialog_window and self.about_dialog_window.winfo_exists():
-            self.about_dialog_window.lift(); self.about_dialog_window.focus_set(); return
-        self.about_dialog_window = ctk.CTkToplevel(self.master)
-        self.about_dialog_window.title("Sobre Analisador de Circuito CA")
-        self.about_dialog_window.geometry("500x650")
-        self.about_dialog_window.transient(self.master) 
-        self.about_dialog_window.after(50, lambda: self._grab_toplevel_safely(self.about_dialog_window)) # CORRIGIDO
-        about_scroll_frame = ctk.CTkScrollableFrame(self.about_dialog_window, corner_radius=0, fg_color="transparent")
-        about_scroll_frame.pack(expand=True, fill="both", padx=0, pady=0)
-        content_frame = ctk.CTkFrame(about_scroll_frame)
-        content_frame.pack(expand=True, fill="x", padx=15, pady=15)
-        ctk.CTkLabel(content_frame, text="Analisador de Circuito CA", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(0,15))
-        info_text = (
-            "**Versão:** 2.0.0 (Super Sprint)\n\n"
-            "Ferramenta para análise de circuitos RLC CA.\n\n"
-            "**Funcionalidades Implementadas:**\n"
-            "- Análise de circuitos RLC **Série** e **Paralelo**.\n"
-            "- Seleção explícita de componentes (R, L, C) para análise.\n" 
-            "- Varredura de frequência com plotagem gráfica incorporada:\n"
-            "  - Múltiplas curvas de magnitude no mesmo gráfico.\n" 
-            "  - Plotagem de uma curva de fase em eixo Y secundário.\n" 
-            "- Atualização do gráfico em tempo real ao modificar parâmetros.\n"
-            "- Escala do gráfico (X e Y) determinada automaticamente (Log/Linear).\n"
-            "- Exibição da frequência de ressonância (f0) teórica no gráfico.\n"
-            "- Marcação de pontos de máximo/mínimo na curva plotada.\n"
-            "- Cálculo e exibição do Fator de Qualidade (Q) e Largura de Banda (BW).\n"
-            "- Análise detalhada para uma frequência específica, incluindo:\n"
-            "  - Impedâncias (Z_R, Z_L, Z_C, Z_Total)\n" 
-            "  - Correntes (I_Total, I_R, I_L, I_C)\n" 
-            "  - Tensões (V_R, V_L, V_C)\n" 
-            "  - Potências Totais (Aparente, Ativa, Reativa).\n"
-            "  - Potências por Componente (P_R, Q_L, Q_C).\n" 
-            "  - Fator de Potência (FP) total.\n"
-            "- Tratamento de casos RL e RC (L=0 ou C=0), com f0, Q, BW como N/A.\n"
-            "- Validação de entradas com feedback visual (bordas vermelhas).\n"
-            "- Interface gráfica com painéis para configuração e resultados.\n"
-            "- Barra de ferramentas Matplotlib no gráfico (Zoom, Pan, Salvar Imagem).\n"
-            "- Salvar e Carregar configurações da análise em arquivos JSON.\n"
-            "- Mensagem de erro/status no gráfico se parâmetros de plotagem forem inválidos.\n"
-            "- Feedback textual ('Calculando...') e barra de progresso para varreduras.\n"
-            "- Opções de formatação de saída (casas decimais, notação científica).\n\n"
-            "**Próximos Passos (Ideias):**\n"
-            "- Entrada de circuito via Netlist (simplificada).\n" 
-            "- Barra de progresso visual mais granular para varreduras longas.\n"
-            "- Suporte a mais topologias / Análise Nodal.\n\n"
-            "Agradecimentos por utilizar!"
-        )
-        ctk.CTkLabel(content_frame, text=info_text, justify="left", wraplength=420).pack(pady=10, padx=5, anchor="w")
-        close_button_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
-        close_button_frame.pack(pady=(15,5), fill="x")
-        close_button = ctk.CTkButton(close_button_frame, text="Fechar", command=self.about_dialog_window.destroy, width=100)
-        close_button.pack()
-        self.about_dialog_window.after(10, self._center_toplevel_after_draw, self.about_dialog_window)
-        self.about_dialog_window.focus_set()
+        if self.about_dialog_window and self.about_dialog_window.winfo_exists(): self.about_dialog_window.lift(); self.about_dialog_window.focus_set(); return
+        self.about_dialog_window=ctk.CTkToplevel(self.master); self.about_dialog_window.title("Sobre Analisador de Circuito CA"); self.about_dialog_window.geometry("500x640")
+        self.about_dialog_window.transient(self.master); self.about_dialog_window.after(50,self._grab_toplevel_safely,self.about_dialog_window)
+        scroll_frame=ctk.CTkScrollableFrame(self.about_dialog_window,fg_color="transparent"); scroll_frame.pack(expand=True,fill="both")
+        content_frame=ctk.CTkFrame(scroll_frame); content_frame.pack(expand=True,fill="x",padx=15,pady=15)
+        ctk.CTkLabel(content_frame,text="Analisador de Circuito CA",font=ctk.CTkFont(size=18,weight="bold")).pack(pady=(0,15))
+        info_text=("**Versão:** 2.5.0 (Foco Diagrama Fasorial)\n\nFerramenta para análise de circuitos RLC CA em frequência única.\n\n"
+                   "**Funcionalidades:**\n- Análise RLC Série/Paralelo (eq.) em freq. única.\n- Entrada via Netlist e manual.\n"
+                   "- Cálculo de RLC equivalentes.\n- Análise detalhada (Z, I, V, Potências P,Q,S, FP).\n- Cálculo de f0, Q, BW teóricos.\n"
+                   "- Correção de Fator de Potência.\n- Diagrama Fasorial (V, I Total, I Ramos em Paralelo).\n- Salvar/Carregar configurações.\n\n"
+                   "**Nota:** A visualização de formas de onda foi temporariamente removida.\n\n"
+                   "**Roadmap:** Editor Visual, Análise Nodal, Trifásico.")
+        ctk.CTkLabel(content_frame,text=info_text,justify="left",wraplength=420).pack(pady=10,padx=5,anchor="w")
+        ctk.CTkButton(content_frame,text="Fechar",command=self.about_dialog_window.destroy,width=100).pack(pady=(15,5))
+        self.about_dialog_window.after(10,self._center_toplevel_after_draw,self.about_dialog_window); self.about_dialog_window.focus_set()
 
     def _center_toplevel_after_draw(self, toplevel_window):
         toplevel_window.update_idletasks()
-        master_x=self.master.winfo_x(); master_y=self.master.winfo_y()
-        master_width=self.master.winfo_width(); master_height=self.master.winfo_height()
-        popup_width=toplevel_window.winfo_width(); popup_height=toplevel_window.winfo_height()
-        if popup_width<=1 or popup_height<=1: 
-            try:
-                geom_str = str(toplevel_window.geometry()); size_part = geom_str.split('+')[0]
-                popup_width,popup_height = map(int, size_part.split('x'))
-            except: 
-                try: popup_width=int(toplevel_window.cget("width"));popup_height=int(toplevel_window.cget("height"))
-                except: popup_width,popup_height=500,650 
-        center_x=master_x+(master_width-popup_width)//2; center_y=master_y+(master_height-popup_height)//2
-        toplevel_window.geometry(f"{popup_width}x{popup_height}+{center_x}+{center_y}")
+        mw,mh,mx,my=self.master.winfo_width(),self.master.winfo_height(),self.master.winfo_x(),self.master.winfo_y()
+        pw,ph=toplevel_window.winfo_width(),toplevel_window.winfo_height()
+        if pw<=1 or ph<=1:
+            try: s=str(toplevel_window.geometry()).split('+')[0]; pw,ph=map(int,s.split('x'))
+            except: pw,ph=500,640
+        toplevel_window.geometry(f"{pw}x{ph}+{(mx+(mw-pw)//2)}+{(my+(mh-ph)//2)}")
 
-    def analyze_circuit(self): 
-        self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self._clear_all_entry_error_styles()
-        params,errors=self._validate_all_parameters(silent=False,check_detail_freq=True)
-        if not params:
-            self.results_text.insert("1.0","Erro de entrada:\n"+"\n".join(errors if errors else ["Valores inválidos."]))
-            self._clear_embedded_plot(error_message="Parâmetros de análise inválidos.")
-            self.results_text.configure(state="disabled"); return
+    def _perform_core_analysis(self, circuit_params):
+        results = {}
+        r_val = circuit_params.get('r_val',0.0); l_val = circuit_params.get('l_val',0.0); c_val = circuit_params.get('c_val',0.0)
+        v_mag=circuit_params.get('v_mag',0);v_phase_deg=circuit_params.get('v_phase_deg',0)
+        topology=circuit_params.get('topology',"Série");freq=circuit_params.get('freq_details')
+
+        results['v_source_phasor']=cmath.rect(v_mag,math.radians(v_phase_deg))
+        results['r_val'] = r_val; results['l_val'] = l_val; results['c_val'] = c_val
+        results['topology'] = topology; results['freq'] = freq
+
+        z_r_val = complex(r_val, 0)
+        z_l_val = complex(0, 2 * math.pi * freq * l_val) if l_val > 1e-12 and freq > 1e-12 else complex(0,0)
+        z_c_val = complex(0, -1 / (2 * math.pi * freq * c_val)) if c_val > 1e-12 and freq > 1e-12 else complex(0, -float('inf'))
         
-        self.progress_bar_frame.pack(pady=(5,0),padx=10,fill="x",before=self.note_label)
-        self.progress_bar.pack(pady=5,padx=0,fill="x"); self.progress_bar.start(); self.master.update_idletasks()
+        results['z_r_phasor'] = z_r_val; results['z_l_phasor'] = z_l_val; results['z_c_phasor'] = z_c_val
+        it = 0j 
+        if topology=="Série":
+            results['z_total_phasor'] = z_r_val + z_l_val + z_c_val
+            if abs(results['z_total_phasor']) < 1e-12: it = results['v_source_phasor'] / (1e-12 + 0j) if abs(results['v_source_phasor']) > 1e-12 else 0j
+            elif cmath.isinf(results['z_total_phasor']): it = 0j
+            else: it = results['v_source_phasor'] / results['z_total_phasor']
+            results['i_total_phasor'] = it
+            results['v_r_phasor'] = it * z_r_val; results['v_l_phasor'] = it * z_l_val
+            results['v_c_phasor'] = it * z_c_val if not cmath.isinf(z_c_val.imag) else results['v_source_phasor'] - results['v_r_phasor'] - results['v_l_phasor']
+            results['i_r_phasor'] = it if r_val > 1e-12 else 0j; results['i_l_phasor'] = it if l_val > 1e-12 else 0j
+            results['i_c_phasor'] = it if c_val > 1e-12 and not cmath.isinf(z_c_val.imag) else 0j
+        elif topology=="Paralelo":
+            yr = 1/z_r_val if r_val > 1e-12 else (complex(float('inf'),0) if r_val == 0 else 0j)
+            yl = 1/z_l_val if l_val > 1e-12 and abs(z_l_val.imag) > 1e-12 else 0j
+            yc = 0j
+            if c_val > 1e-12: yc = 1/z_c_val if not cmath.isinf(z_c_val.imag) and abs(z_c_val.imag) > 1e-12 else (complex(float('inf'),0) if abs(z_c_val.imag)<1e-12 else 0j)
+            y_total = yr + yl + yc
+            results['z_total_phasor'] = 1/y_total if abs(y_total) > 1e-12 and not cmath.isinf(y_total) else (0j if cmath.isinf(y_total) else complex(float('inf'),0))
+            results['i_total_phasor'] = results['v_source_phasor'] * y_total
+            results['v_r_phasor'] = results['v_source_phasor'] if r_val > 1e-12 or (r_val == 0 and topology == "Paralelo") else 0j
+            results['v_l_phasor'] = results['v_source_phasor'] if l_val > 1e-12 else 0j
+            results['v_c_phasor'] = results['v_source_phasor'] if c_val > 1e-12 else 0j
+            results['i_r_phasor'] = results['v_source_phasor'] * yr if r_val > 1e-12 or (r_val == 0 and topology == "Paralelo") else 0j
+            results['i_l_phasor'] = results['v_source_phasor'] * yl if l_val > 1e-12 else 0j
+            results['i_c_phasor'] = results['v_source_phasor'] * yc if c_val > 1e-12 else 0j
+        
+        s_complex = results['v_source_phasor'] * results['i_total_phasor'].conjugate()
+        results['p_total'] = s_complex.real; results['q_total'] = s_complex.imag; results['s_total_apparent'] = abs(s_complex)
+        results['fp_total'] = results['p_total'] / results['s_total_apparent'] if results['s_total_apparent'] > 1e-9 else (1.0 if abs(results['p_total'])<1e-9 and abs(results['q_total'])<1e-9 else 0.0)
+        results['fp_total'] = max(-1.0, min(1.0, results['fp_total']))
+        results['p_r_comp'] = (abs(results.get('i_r_phasor',0j))**2)*r_val if topology=="Série" and r_val>1e-12 else (abs(results.get('v_r_phasor',0j))**2/r_val if topology=="Paralelo" and r_val>1e-12 else 0.0)
+        if r_val==0 and topology=="Paralelo" and yr!=0j and abs(yr.real if yr else 0)==float('inf'): results['p_r_comp'] = (results['v_source_phasor']*results.get('i_r_phasor',0j).conjugate()).real
+        xl_val=z_l_val.imag; results['q_l_comp']=(abs(results.get('i_l_phasor',0j))**2)*xl_val if topology=="Série" and l_val>1e-12 and abs(xl_val)>1e-12 else (abs(results.get('v_l_phasor',0j))**2/xl_val if topology=="Paralelo" and l_val>1e-12 and abs(xl_val)>1e-12 else 0.0)
+        xc_val=z_c_val.imag; results['q_c_comp']=(abs(results.get('i_c_phasor',0j))**2)*xc_val if topology=="Série" and c_val>1e-12 and not math.isinf(xc_val) and abs(xc_val)>1e-12 else (abs(results.get('v_c_phasor',0j))**2/xc_val if topology=="Paralelo" and c_val>1e-12 and not math.isinf(xc_val) and abs(xc_val)>1e-12 else 0.0)
+        return results
+
+    def analyze_circuit(self):
+        self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self._clear_all_entry_error_styles(); self.analysis_performed_successfully=False
+        self.analysis_results = {} 
+        params,errors=self._validate_all_parameters(silent=False)
+        if not params: 
+            self.results_text.insert("1.0","Erro de entrada:\n"+"\n".join(errors or ["Valores inválidos."])); 
+            self.results_text.configure(state="disabled"); 
+            self._clear_main_plot(error_message="Parâmetros inválidos.")
+            return
+
+        self.progress_bar_frame.pack(pady=(5,0),padx=10,fill="x",before=self.note_label); self.progress_bar.pack(pady=5,padx=0,fill="x"); self.progress_bar.start(); self.master.update_idletasks()
         output_text=""
         try:
-            frequencies,all_plot_data_y,f0_calc=self._calculate_sweep_data(params)
-            extremum_info_for_plot=None
-            if params['selected_magnitude_plots']:
-                first_mag_plot=params['selected_magnitude_plots'][0]
-                if first_mag_plot in all_plot_data_y and all_plot_data_y[first_mag_plot]:
-                    extremum_info_for_plot=self._find_extremum(frequencies,all_plot_data_y[first_mag_plot],first_mag_plot,params['topology'])
-            self._update_embedded_plot(frequencies,all_plot_data_y,params,f0_resonance=f0_calc,extremum_info_main=extremum_info_for_plot)
-            self.results_text.delete("1.0","end")
-            output_text+=f"--- Resumo da Varredura ({params['topology']}) ---\n"
-            output_text+=f"  Componentes Incluídos: R={'S' if self.include_r_var.get() else 'N'}, L={'S' if self.include_l_var.get() else 'N'}, C={'S' if self.include_c_var.get() else 'N'}\n"
-            output_text+=f"  Intervalo: {self._format_value(params['freq_start'])} Hz a {self._format_value(params['freq_end'])} Hz ({params['num_points']} pontos).\n"
-            plot_selection_str=", ".join(params['selected_magnitude_plots'])
-            if params['selected_phase_plot']!="Nenhuma":
-                if plot_selection_str:plot_selection_str+=" & "
-                plot_selection_str+=params['selected_phase_plot']
-            output_text+=f"  Grandezas Plotadas: {plot_selection_str or 'Nenhuma'}\n"
-            q_factor_str,bandwidth_str,f0_calc_str="N/A","N/A","N/A"
-            if f0_calc is not None:
-                f0_calc_str=self._format_value(f0_calc,"Hz")
-                omega_0=2*math.pi*f0_calc
-                r_val_q = params.get('r_val',0) if self.include_r_var.get() else 0
-                l_val_q = params.get('l_val',0) if self.include_l_var.get() else 0
-                c_val_q = params.get('c_val',0) if self.include_c_var.get() else 0
-                q_factor_val=None
-                if l_val_q>1e-12 and c_val_q>1e-12:
-                    if params['topology']=="Série":
-                        if r_val_q>1e-12:q_factor_val=(omega_0*l_val_q)/r_val_q
-                        else:q_factor_val=float('inf')
-                    elif params['topology']=="Paralelo":
-                        if r_val_q>1e-12:
-                            if l_val_q>1e-12 and omega_0>1e-9:q_factor_val=r_val_q/(omega_0*l_val_q)
-                            elif c_val_q>1e-12 and omega_0>1e-9:q_factor_val=omega_0*c_val_q*r_val_q
-                        else:q_factor_val=0 # R=0 em paralelo, Q é baixo
-                elif self.include_r_var.get() and r_val_q > 1e-12 : 
-                     if self.include_l_var.get() and l_val_q > 1e-12 and not self.include_c_var.get(): # RL
-                          # Q para RL não é definido por f0 de RLC. Deixar N/A no contexto de ressonância RLC.
-                          pass 
-                     elif self.include_c_var.get() and c_val_q > 1e-12 and not self.include_l_var.get(): #RC
-                          pass
-                if q_factor_val is not None:
-                    if q_factor_val==float('inf'):q_factor_str,bandwidth_str="Infinito",self._format_value(0.0,"Hz")
-                    elif q_factor_val>1e-9:q_factor_str=self._format_value(q_factor_val);bandwidth_str=self._format_value(f0_calc/q_factor_val,"Hz") if f0_calc else "N/A"
-                    else:q_factor_str,bandwidth_str=self._format_value(q_factor_val)+" (Baixo)","Muito Larga" if f0_calc else "N/A"
-            output_text+=f"  Frequência de Ressonância (f0): {f0_calc_str}\n"
-            output_text+=f"    Fator de Qualidade (Q): {q_factor_str}\n"
-            output_text+=f"    Largura de Banda (BW): {bandwidth_str}\n"
-            if extremum_info_for_plot:
-                 output_text+=f"  Ponto Extremo ({extremum_info_for_plot[0]} em {params['selected_magnitude_plots'][0] if params['selected_magnitude_plots'] else 'N/A'}): {extremum_info_for_plot[3]} @ {self._format_value(extremum_info_for_plot[1],'Hz')}\n"
-            output_text+="-------------------------------------------\n\n"
-            if params.get('freq_details') is not None:
-                output_text+=self._get_single_frequency_analysis_details(params,params['freq_details'])
-            else:output_text+="Nenhuma frequência para análise detalhada foi fornecida ou era inválida.\n"
+            if params.get('freq_details') and params['freq_details'] > 0:
+                self.analysis_results = self._perform_core_analysis(params)
+                self.current_p_real=self.analysis_results.get('p_total'); self.current_q_reactive=self.analysis_results.get('q_total')
+                self.current_s_apparent=self.analysis_results.get('s_total_apparent'); self.current_fp_actual=self.analysis_results.get('fp_total')
+                self.current_v_load_mag=abs(self.analysis_results.get('v_source_phasor',0j))
+                self.current_freq=params['freq_details']
+
+                f0_res=None; r,l,c=params.get('r_val',0.0),params.get('l_val',0.0),params.get('c_val',0.0)
+                if l>1e-12 and c>1e-12:
+                    try: f0_res=1/(2*math.pi*math.sqrt(l*c))
+                    except: pass 
+                q_s, bw_s, f0_s = "N/A", "N/A", "N/A"
+                if f0_res:
+                    f0_s=self._format_value(f0_res,"Hz"); w0=2*math.pi*f0_res; q_v=None
+                    if params['topology']=="Série": q_v=(w0*l)/r if r>1e-12 else float('inf')
+                    elif params['topology']=="Paralelo": q_v=r/(w0*l) if r>1e-12 and l>1e-12 and w0>1e-9 else (w0*c*r if r>1e-12 and c>1e-12 and w0>1e-9 else (0.0 if r==0 else None))
+                    if q_v is not None:
+                        if q_v==float('inf'): q_s,bw_s="Infinito",self._format_value(0.0,"Hz")
+                        elif q_v>1e-9: q_s=self._format_value(q_v); bw_s=self._format_value(f0_res/q_v,"Hz") if f0_res else "N/A"
+                        else: q_s=self._format_value(q_v)+" (Baixo)"; bw_s="Muito Larga" if f0_res else "N/A"
+                output_text+=f"--- Resumo Circuito Equivalente ({params['topology']}) ---\n"
+                output_text+=f"  R_eq={self._format_value(r,'Ω')}, L_eq={self._format_value(l,'H')}, C_eq={self._format_value(c,'F')}\n"
+                output_text+=f"  Ativos: R={'S' if self.include_r_var.get()and r>1e-12 else 'N'}, L={'S' if self.include_l_var.get()and l>1e-12 else 'N'}, C={'S' if self.include_c_var.get()and c>1e-12 else 'N'}\n"
+                output_text+=f"  f0 Teórica: {f0_s}\n  Q Teórico: {q_s}\n  BW Teórica: {bw_s}\n-------------------------------------------\n\n"
+                
+                analysis_details_text = self._generate_analysis_details_text(self.analysis_results)
+                output_text += analysis_details_text
+                self.analysis_performed_successfully=True
+
+                self._update_static_circuit_diagram(self.analysis_results)
+                self._update_phasor_diagram(self.analysis_results) # Chama diretamente o diagrama fasorial
+            else: 
+                output_text+="Nenhuma frequência de análise válida foi fornecida.\n"
+                self._clear_main_plot(error_message="Frequência inválida.")
+                self._clear_static_circuit_diagram(error_message="Frequência inválida.")
             self.results_text.insert("1.0",output_text)
         except Exception as e:
-            self.results_text.delete("1.0","end");error_msg=f"Erro inesperado: {str(e)}"
-            messagebox.showerror("Erro Inesperado",error_msg);self.results_text.insert("1.0",error_msg)
-            self._clear_embedded_plot(error_message="Erro na análise.")
-            import traceback;traceback.print_exc()
-        finally:
-            self.progress_bar.stop();self.progress_bar.pack_forget();self.progress_bar_frame.pack_forget()
+            self.results_text.delete("1.0","end"); error_msg=f"Erro inesperado na análise: {str(e)}"; 
+            messagebox.showerror("Erro Inesperado",error_msg); self.results_text.insert("1.0",error_msg)
+            self._clear_main_plot(error_message="Erro na análise.")
+            self._clear_static_circuit_diagram(error_message="Erro na análise.")
+            import traceback; traceback.print_exc()
+        finally: 
+            self.progress_bar.stop();self.progress_bar.pack_forget();self.progress_bar_frame.pack_forget(); 
             self.results_text.configure(state="disabled")
 
-    def _get_single_frequency_analysis_details(self, circuit_params, specific_freq):
-        output = ""
+    def _generate_analysis_details_text(self, results):
+        if not results: return "Nenhum resultado para exibir."
+        output = ""; topo=results.get('topology','N/A'); freq=results.get('freq','N/A')
+        output+=f"--- Análise Detalhada para Frequência: {self._format_value(freq,'Hz')} ({topo}) ---\n"
+        output+=f"  Fonte: {self.format_phasor(results.get('v_source_phasor',0j),'V')}\n  Z_total: {self.format_phasor(results.get('z_total_phasor',0j),'Ω')}\n  I_total Fonte: {self.format_phasor(results.get('i_total_phasor',0j),'A')}\n"
+        output+="  ---------------------------\n  Tensões nos Componentes Equivalentes:\n"
+        output+=f"    V_R_eq: {self.format_phasor(results.get('v_r_phasor',0j),'V') if results.get('r_val',0)>1e-12 or (topo=='Paralelo'and results.get('r_val',0)==0) else 'N/A'}\n"
+        output+=f"    V_L_eq: {self.format_phasor(results.get('v_l_phasor',0j),'V') if results.get('l_val',0)>1e-12 else 'N/A'}\n"
+        output+=f"    V_C_eq: {self.format_phasor(results.get('v_c_phasor',0j),'V') if results.get('c_val',0)>1e-12 else 'N/A'}\n"
+        output+="  ---------------------------\n  Correntes nos Componentes Equivalentes:\n"
+        output+=f"    I_R_eq: {self.format_phasor(results.get('i_r_phasor',0j),'A') if results.get('r_val',0)>1e-12 or (topo=='Paralelo'and results.get('r_val',0)==0) else 'N/A'}\n"
+        output+=f"    I_L_eq: {self.format_phasor(results.get('i_l_phasor',0j),'A') if results.get('l_val',0)>1e-12 else 'N/A'}\n"
+        output+=f"    I_C_eq: {self.format_phasor(results.get('i_c_phasor',0j),'A') if results.get('c_val',0)>1e-12 else 'N/A'}\n"
+        fp_val=results.get('fp_total',0.0); q_total_val=results.get('q_total',0.0); s_total_val=results.get('s_total_apparent',0.0)
+        fp_type=" (unitário)" if abs(q_total_val)<1e-9 else (" (atrasado - indutivo)" if q_total_val>0 else " (adiantado - capacitivo)")
+        if abs(s_total_val)<1e-9: fp_type=" (N/A - sem potência)"
+        output+="  ---------------------------\n  Análise de Potência (Total da Fonte):\n"
+        output+=f"    |S|: {self._format_value(s_total_val,'VA')}\n    P: {self._format_value(results.get('p_total',0.0),'W')}\n    Q: {self._format_value(q_total_val,'VAR')}\n    FP: {self._format_value(fp_val)}{fp_type}\n"
+        output+="  ---------------------------\n  Potências nos Componentes Equivalentes:\n"
+        output+=f"    P_R_eq: {self._format_value(results.get('p_r_comp',0.0),'W') if results.get('r_val',0)>1e-12 or (topo=='Paralelo'and results.get('r_val',0)==0) else 'N/A'}\n"
+        output+=f"    Q_L_eq: {self._format_value(results.get('q_l_comp',0.0),'VAR') if results.get('l_val',0)>1e-12 else 'N/A'}\n"
+        output+=f"    Q_C_eq: {self._format_value(results.get('q_c_comp',0.0),'VAR') if results.get('c_val',0)>1e-12 else 'N/A'}\n"
+        pr_comp,p_total_val,r_val=results.get('p_r_comp',0.0),results.get('p_total',0.0),results.get('r_val',0.0)
+        if r_val>1e-12 and not any(map(math.isinf,(pr_comp,p_total_val))) and not any(map(math.isnan,(pr_comp,p_total_val))):
+            if abs(p_total_val)>1e-6 or abs(pr_comp)>1e-6: output+=f"    (Verif. P_R_eq ≈ P_total: {'Sim' if math.isclose(pr_comp,p_total_val,rel_tol=1e-2,abs_tol=1e-3) else 'Não'})\n"
+        ql_comp,qc_comp,q_sum_comp_valid,q_sum_comp=results.get('q_l_comp',0.0),results.get('q_c_comp',0.0),True,0
+        if results.get('l_val',0)>1e-12:
+            if math.isinf(ql_comp) or math.isnan(ql_comp): q_sum_comp_valid=False
+            else: q_sum_comp+=ql_comp
+        if results.get('c_val',0)>1e-12:
+            if math.isinf(qc_comp) or math.isnan(qc_comp): q_sum_comp_valid=False
+            else: q_sum_comp+=qc_comp
+        if q_sum_comp_valid and not (math.isinf(q_total_val) or math.isnan(q_total_val)):
+            if abs(q_total_val)>1e-6 or abs(q_sum_comp)>1e-6:
+                abs_tol_q=max(1e-3,abs(ql_comp)*1e-2 if results.get('l_val',0)>1e-12 and not math.isinf(ql_comp) else 0, abs(qc_comp)*1e-2 if results.get('c_val',0)>1e-12 and not math.isinf(qc_comp) else 0)
+                output+=f"    (Verif. Q_L_eq+Q_C_eq ≈ Q_total: {'Sim' if math.isclose(q_sum_comp,q_total_val,rel_tol=1e-2,abs_tol=abs_tol_q) else 'Não'})\n"
+        return output
+
+    def _calculate_and_display_pf_correction(self):
+        self._clear_all_entry_error_styles(); self._set_entry_error_style('fp_desired',is_error=False)
+        if not self.analysis_performed_successfully: messagebox.showerror("Correção FP","Execute uma análise de circuito bem-sucedida primeiro."); return
+        fp_desired_str=self.fp_desired_entry.get()
+        if not fp_desired_str: messagebox.showerror("Entrada Inválida","Insira o Fator de Potência Desejado."); self._set_entry_error_style('fp_desired',True); return
         try:
-            include_r=self.include_r_var.get();include_l=self.include_l_var.get();include_c=self.include_c_var.get()
-            r_val=circuit_params.get('r_val',0) if include_r else 0.0
-            l_val=circuit_params.get('l_val',0) if include_l else 0.0
-            c_val=circuit_params.get('c_val',0) if include_c else 0.0
-            v_mag=circuit_params.get('v_mag',0);v_phase_deg=circuit_params.get('v_phase_deg',0)
-            topology=circuit_params.get('topology',"Série");freq=specific_freq
-            v_phase_rad=math.radians(v_phase_deg);v_source_phasor=cmath.rect(v_mag,v_phase_rad)
-            z_r_val,z_l_val,z_c_val,xl_val,xc_val=complex(0,0),complex(0,0),complex(0,0),0.0,0.0
-            if include_r:
-                if r_val>1e-12:z_r_val=complex(r_val,0)
-                elif r_val<1e-12 and topology=="Paralelo":z_r_val=complex(1e-12,0)
-                else:z_r_val=complex(0,0) 
-            else:z_r_val=complex(float('inf'),0) if topology=="Paralelo" else complex(0,0) 
-            if include_l:
-                if l_val>1e-12 and freq>1e-12:xl_val=2*cmath.pi*freq*l_val;z_l_val=complex(0,xl_val)
-                else:z_l_val=complex(0,0)
-            else:z_l_val=complex(float('inf'),0) if topology=="Paralelo" else complex(0,0)
-            if include_c:
-                if c_val>1e-12 and freq>1e-12:xc_val=-1/(2*cmath.pi*freq*c_val);z_c_val=complex(0,xc_val)
-                else:z_c_val=complex(float('inf'),0)
-            else:z_c_val=complex(float('inf'),0) 
-            z_total,i_total_source_phasor=complex(0,0),complex(0,0)
-            v_r_phasor,v_l_phasor,v_c_phasor=complex(0,0),complex(0,0),complex(0,0)
-            i_r_phasor,i_l_phasor,i_c_phasor=complex(0,0),complex(0,0),complex(0,0)
-            p_r_comp,q_l_comp,q_c_comp=0.0,0.0,0.0
-            if topology=="Série":
-                z_total=z_r_val+z_l_val+z_c_val
-                if abs(z_total)<1e-12:i_total_source_phasor=v_source_phasor/(1e-12+0j) if abs(v_source_phasor)>1e-12 else complex(0,0)
-                elif abs(z_total)==float('inf'):i_total_source_phasor=complex(0,0)
-                else:i_total_source_phasor=v_source_phasor/z_total
-                if include_r:v_r_phasor=i_total_source_phasor*z_r_val
-                if include_l:v_l_phasor=i_total_source_phasor*z_l_val
-                if include_c:v_c_phasor=i_total_source_phasor*z_c_val if abs(z_c_val)!=float('inf') else (v_source_phasor-v_r_phasor-v_l_phasor if abs(i_total_source_phasor)<1e-9 else i_total_source_phasor*z_c_val)
-                i_r_phasor=i_total_source_phasor if include_r else complex(0,0)
-                i_l_phasor=i_total_source_phasor if include_l else complex(0,0)
-                i_c_phasor=i_total_source_phasor if include_c and abs(z_c_val)!=float('inf') else complex(0,0)
-                if include_r and r_val>1e-12:p_r_comp=(abs(i_r_phasor)**2)*r_val
-                if include_l and l_val>1e-12 and freq>1e-12 and abs(xl_val)>1e-12:q_l_comp=(abs(i_l_phasor)**2)*xl_val
-                if include_c and c_val>1e-12 and freq>1e-12 and abs(xc_val)>1e-12:q_c_comp=(abs(i_c_phasor)**2)*xc_val 
-            elif topology=="Paralelo":
-                y_r=1/z_r_val if include_r and abs(z_r_val)>1e-12 else complex(0,0) 
-                y_l=1/z_l_val if include_l and abs(z_l_val)>1e-12 else complex(0,0)
-                y_c=1/z_c_val if include_c and abs(z_c_val)>1e-12 and abs(z_c_val)!=float('inf') else complex(0,0)
-                y_total=y_r+y_l+y_c
-                z_total=1/y_total if abs(y_total)>1e-12 else complex(float('inf'),0)
-                i_total_source_phasor=v_source_phasor*y_total 
-                v_r_phasor=v_l_phasor=v_c_phasor=v_source_phasor
-                if include_r:i_r_phasor=v_source_phasor*y_r 
-                if include_l:i_l_phasor=v_source_phasor*y_l
-                if include_c:i_c_phasor=v_source_phasor*y_c
-                if include_r and r_val>1e-12:p_r_comp=(abs(v_source_phasor)**2)/r_val
-                elif include_r and r_val<1e-12 and abs(i_r_phasor)!=float('inf'):p_r_comp=abs(v_source_phasor*i_r_phasor.conjugate()).real 
-                if include_l and l_val>1e-12 and freq>1e-12 and abs(xl_val)>1e-12:q_l_comp=(abs(v_source_phasor)**2)/xl_val
-                elif include_l and l_val<1e-12 and freq>1e-12 and abs(i_l_phasor)!=float('inf'):q_l_comp=(v_source_phasor*i_l_phasor.conjugate()).imag 
-                if include_c and c_val>1e-12 and freq>1e-12 and abs(xc_val)>1e-12:q_c_comp=(abs(v_source_phasor)**2)/xc_val
+            fp_desired=float(fp_desired_str)
+            if not (0.01<=fp_desired<=1.0): messagebox.showerror("Entrada Inválida","FP Desejado deve estar entre 0.01 e 1.0."); self._set_entry_error_style('fp_desired',True); return
+        except ValueError: messagebox.showerror("Entrada Inválida","FP Desejado deve ser um número."); self._set_entry_error_style('fp_desired',True); return
+        
+        P_atual = self.analysis_results.get('p_total')
+        Q_atual = self.analysis_results.get('q_total')
+        FP_atual = self.analysis_results.get('fp_total')
+        v_source_phasor_for_pf = self.analysis_results.get('v_source_phasor')
+        V_carga = abs(v_source_phasor_for_pf) if v_source_phasor_for_pf else 0
+        freq = self.analysis_results.get('freq')
+
+        if any(v is None for v in [P_atual,Q_atual,FP_atual,V_carga,freq]): messagebox.showerror("Correção FP","Dados da análise anterior incompletos."); return
+        if abs(V_carga)<1e-6 or abs(freq)<1e-6: messagebox.showerror("Cálculo Impossível","Tensão da carga ou frequência próxima de zero."); return
+        
+        if Q_atual > 1e-9: 
+            if fp_desired <= FP_atual + 1e-4 and fp_desired < 0.99999: 
+                messagebox.showinfo("Correção FP",f"FP desejado ({fp_desired:.3f}) não é melhoria significativa sobre o FP atual ({FP_atual:.3f}) para carga indutiva, ou é menor.\nNenhuma correção com capacitor será calculada.")
+                return
+        elif Q_atual < -1e-9: 
+            messagebox.showinfo("Correção FP",f"Circuito já é capacitivo (Q={self._format_value(Q_atual,'VAR')}).\nCorreção com capacitor adicional não é aplicável para melhorar o FP em direção a 1.")
+            return
+        else: 
+            messagebox.showinfo("Correção FP",f"Circuito já possui FP próximo de 1 (Q ≈ 0).\nNenhuma correção com capacitor é necessária para FP={fp_desired:.3f}.")
+            return
+        
+        try: fp_desired_clamped=max(0.01,min(1.0,fp_desired)); phi_desejado_rad=math.acos(fp_desired_clamped)
+        except ValueError: messagebox.showerror("Erro Cálculo","Valor inválido para acos(FP desejado)."); return
+        
+        Q_desejada=P_atual*math.tan(phi_desejado_rad); Q_capacitor_necessaria=Q_atual-Q_desejada
+        cap_val=0.0; S_nova=self.analysis_results.get('s_total_apparent',0.0); Q_nova_final=Q_atual
+
+        if Q_capacitor_necessaria > 1e-9: 
+            omega=2*math.pi*freq
+            try: cap_val=Q_capacitor_necessaria/(V_carga**2*omega)
+            except ZeroDivisionError: messagebox.showerror("Erro Cálculo","Divisão por zero ao calcular capacitor."); return
+            Q_nova_final=Q_desejada; S_nova=P_atual/fp_desired_clamped if abs(fp_desired_clamped)>1e-9 else math.sqrt(P_atual**2+Q_nova_final**2)
+            results_txt=f"\n\n--- Resultados da Correção de Fator de Potência ---\n  FP Atual: {self._format_value(FP_atual)} (P={self._format_value(P_atual,'W')}, Q={self._format_value(Q_atual,'VAR')})\n"
+            results_txt+=f"  FP Desejado: {self._format_value(fp_desired)}\n  Capacitor (paralelo): {self._format_value(cap_val,'F')}\n"
+            results_txt+=f"    (Equiv. a {self._format_value(cap_val*1e3,'mF')} ou {self._format_value(cap_val*1e6,'µF')} ou {self._format_value(cap_val*1e9,'nF')})\n"
+            results_txt+=f"  Qc Fornecida: {self._format_value(Q_capacitor_necessaria,'VAR')} (capacitivos)\n  Q_nova Estimada (carga+capacitor): {self._format_value(Q_nova_final,'VAR')}\n  S_nova Estimada (carga+capacitor): {self._format_value(S_nova,'VA')}\n"
+        else:
+            results_txt=f"\n\n--- Correção de Fator de Potência ---\n  FP Atual: {self._format_value(FP_atual)}\n  FP Desejado: {self._format_value(fp_desired)}\n"
+            results_txt+=f"  Nenhuma correção com capacitor é necessária ou o FP desejado não representa uma melhoria por este método.\n  (Q a compensar pelo capacitor: {self._format_value(Q_capacitor_necessaria,'VAR')})\n"
+        self.results_text.configure(state="normal"); self.results_text.insert(tk.END,results_txt); self.results_text.configure(state="disabled")
+
+    def _clear_main_plot(self, initial_message=None, error_message=None):
+        if self.ax_main_plot:
+            self.ax_main_plot.set_visible(True) # Garantir que o eixo principal esteja visível
+            self.ax_main_plot.clear()
             
-            output+=f"--- Detalhes para Frequência: {self._format_value(freq,'Hz')} ({topology}) ---\n"
-            output+=f"  Componentes Incluídos: R={'S' if include_r else 'N'}, L={'S' if include_l else 'N'}, C={'S' if include_c else 'N'}\n"
-            if abs(z_total)==float('inf') and not (include_r or include_l or include_c):
-                 output+=f"  Impedância Total (Z_total): {self._format_value(float('inf'),'Ω')} (Circuito totalmente aberto)\n"
-                 output+=f"  Corrente Total (I_total Fonte): {self.format_phasor(complex(0,0),'A')}\n"
-            elif abs(z_total)==float('inf'):
-                 output+=f"  Impedância Total (Z_total): {self._format_value(float('inf'),'Ω')}\n"
-                 output+=f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor,'A')}\n"
-            else:
-                output+=f"  Impedância Total (Z_total): {self.format_phasor(z_total,'Ω')}\n"
-                output+=f"  Corrente Total (I_total Fonte): {self.format_phasor(i_total_source_phasor,'A')}\n"
-            output+="  ---------------------------\n"
-            if topology=="Série":
-                if include_r:output+=f"  Tensão no Resistor (V_R): {self.format_phasor(v_r_phasor,'V')}\n"
-                if include_l:output+=f"  Tensão no Indutor (V_L): {self.format_phasor(v_l_phasor,'V')}\n"
-                if include_c:output+=f"  Tensão no Capacitor (V_C): {self.format_phasor(v_c_phasor,'V')}\n"
-            elif topology=="Paralelo":
-                output+=f"  Tensão nos Componentes (V_fonte): {self.format_phasor(v_source_phasor,'V')}\n"
-                if include_r:output+=f"  Corrente em R (I_R): {self.format_phasor(i_r_phasor,'A')}\n"
-                if include_l:output+=f"  Corrente em L (I_L): {self.format_phasor(i_l_phasor,'A')}\n"
-                if include_c:output+=f"  Corrente em C (I_C): {self.format_phasor(i_c_phasor,'A')}\n"
-            output+="  ---------------------------\n  Análise de Potência (Total da Fonte):\n"
-            s_complex=v_source_phasor*i_total_source_phasor.conjugate()
-            p_real,q_reactive,s_apparent_mag=s_complex.real,s_complex.imag,abs(s_complex)
-            power_factor=p_real/s_apparent_mag if s_apparent_mag>1e-9 else (1.0 if abs(p_real)>1e-9 and abs(q_reactive)<1e-9 else 0.0)
-            fp_type,epsilon="(N/A)",1e-9
-            if abs(s_apparent_mag)<epsilon:fp_type="(N/A - sem potência significante)"
-            elif abs(q_reactive)<epsilon:fp_type="(unitário)"
-            elif q_reactive > 0:fp_type="(atrasado - indutivo)"
-            else:fp_type="(adiantado - capacitivo)"
-            output+=f"    Potência Aparente (|S|): {self._format_value(s_apparent_mag,'VA')}\n    Potência Ativa (P): {self._format_value(p_real,'W')}\n"
-            output+=f"    Potência Reativa (Q): {self._format_value(q_reactive,'VAR')}\n    Fator de Potência (FP): {self._format_value(power_factor)} {fp_type}\n"
-            output+="  ---------------------------\n  Potências nos Componentes:\n"
-            if include_r:output+=f"    Potência Ativa no Resistor (P_R): {self._format_value(p_r_comp,'W')}\n"
-            else:output+="    P_R: N/A (R não incluído)\n"
-            if include_l:output+=f"    Potência Reativa no Indutor (Q_L): {self._format_value(q_l_comp,'VAR')}\n"
-            else:output+="    Q_L: N/A (L não incluído)\n"
-            if include_c:output+=f"    Potência Reativa no Capacitor (Q_C): {self._format_value(q_c_comp,'VAR')}\n"
-            else:output+="    Q_C: N/A (C não incluído)\n"
-            if include_r and not (math.isinf(p_r_comp) or math.isinf(p_real) or math.isnan(p_r_comp) or math.isnan(p_real)):
-                 if abs(p_real)>1e-6 or abs(p_r_comp)>1e-6 :
-                    output+=f"    (Verificação P_R ≈ P_total: {'Sim' if math.isclose(p_r_comp,p_real,rel_tol=1e-2,abs_tol=1e-3) else 'Não'})\n"
-            q_sum_comp_valid=True;q_sum_comp=0
-            if include_l:
-                if math.isinf(q_l_comp) or math.isnan(q_l_comp):q_sum_comp_valid=False
-                else:q_sum_comp+=q_l_comp
-            if include_c:
-                if math.isinf(q_c_comp) or math.isnan(q_c_comp):q_sum_comp_valid=False
-                else:q_sum_comp+=q_c_comp
-            if q_sum_comp_valid and not (math.isinf(q_reactive) or math.isnan(q_reactive)):
-                if abs(q_reactive)>1e-6 or abs(q_sum_comp)>1e-6:
-                    abs_tol_q_sum=max(1e-3,abs(q_l_comp)*1e-2 if include_l and not math.isinf(q_l_comp) else 0,abs(q_c_comp)*1e-2 if include_c and not math.isinf(q_c_comp) else 0) 
-                    output+=f"    (Verificação Q_L+Q_C ≈ Q_total: {'Sim' if math.isclose(q_sum_comp,q_reactive,rel_tol=1e-2,abs_tol=abs_tol_q_sum) else 'Não'})\n"
-            return output
-        except Exception as e:
-            import traceback;traceback.print_exc()
-            return f"  Erro ao calcular detalhes para {self._format_value(specific_freq,'Hz')} ({topology}): {e}\n"
+            if self.ax_main_plot_twin and self.ax_main_plot_twin.figure: 
+                try:
+                    self.fig_main_plot.delaxes(self.ax_main_plot_twin)
+                except (AttributeError, ValueError, KeyError): 
+                    # Se delaxes falhar, tente limpar e esconder
+                    try:
+                        self.ax_main_plot_twin.clear()
+                        self.ax_main_plot_twin.set_visible(False)
+                    except: pass # Ignorar erros na limpeza secundária
+                self.ax_main_plot_twin = None 
 
-    def _update_embedded_plot(self, frequencies, all_plot_data_y, params, f0_resonance=None, extremum_info_main=None):
-        if not (self.fig_embedded and self.ax_embedded and self.canvas_embedded): return 
-        self.ax_embedded.clear()
-        if hasattr(self,'ax2_embedded') and self.ax2_embedded and self.ax2_embedded.figure : self.ax2_embedded.clear(); self.ax2_embedded.set_visible(False)
-        else: self.ax2_embedded = None 
-        
-        # Escala X automática
-        use_log_x = False
-        if len(frequencies) > 1 and frequencies[0] > 0 and frequencies[-1]/frequencies[0] > 100: use_log_x = True
-        self.ax_embedded.set_xscale('log' if use_log_x else 'linear')
+            # DEBUG: Cor de fundo para o placeholder
+            self.ax_main_plot.set_facecolor('lightgrey') 
+            self.fig_main_plot.patch.set_facecolor('lightyellow')
 
-        lines_plotted = []; labels_plotted = []; color_index = 0; primary_y_log_needed = False
-        
-        # Determinar se o eixo Y primário precisa ser log
-        if params['selected_magnitude_plots']:
-            all_mag_data_flat = []
-            for name in params['selected_magnitude_plots']:
-                if name in all_plot_data_y and all_plot_data_y[name]: 
-                    all_mag_data_flat.extend(filter(lambda x: isinstance(x,(int,float)) and not math.isinf(x) and not math.isnan(x) and x > 1e-9, all_plot_data_y[name]))
-            if all_mag_data_flat:
-                min_val,max_val=min(all_mag_data_flat),max(all_mag_data_flat)
-                if min_val>0 and max_val/min_val>1000:primary_y_log_needed=True
-        
-        self.ax_embedded.set_yscale('log' if primary_y_log_needed else 'linear')
-        first_line_color = self.plot_colors[0] # Cor padrão para o eixo Y primário
+            title = "Diagrama Fasorial"; message = initial_message or "Aguardando análise..."; color = 'gray'
+            if error_message: message = error_message; title = "Erro no Gráfico"; color = 'red'
+            
+            self.ax_main_plot.text(0.5, 0.5, message, ha='center', va='center', fontsize=9, color=color, wrap=True)
+            self.ax_main_plot.set_title(title, fontsize=10)
+            
+            self.ax_main_plot.set_xlabel("")
+            self.ax_main_plot.set_ylabel("")
+            self.ax_main_plot.set_xticks([])
+            self.ax_main_plot.set_yticks([])
+            self.ax_main_plot.grid(False) 
 
-        for name in params['selected_magnitude_plots']:
-            if name in all_plot_data_y and all_plot_data_y[name]:
-                current_data_series = np.array(all_plot_data_y[name])
-                valid_indices = ~np.isnan(current_data_series)
-                if np.any(valid_indices):
-                    current_color = self.plot_colors[color_index % len(self.plot_colors)]
-                    if color_index == 0: first_line_color = current_color # Cor da primeira curva de magnitude
-                    line, = self.ax_embedded.plot(frequencies[valid_indices], current_data_series[valid_indices], 
-                                                  marker='.', linestyle='-', markersize=2, color=current_color, label=name)
-                    lines_plotted.append(line); labels_plotted.append(name); color_index += 1
-        
-        self.ax_embedded.set_ylabel("Magnitude", fontsize=9, color=first_line_color)
-        self.ax_embedded.tick_params(axis='y', labelcolor=first_line_color)
+            try: 
+                self.fig_main_plot.tight_layout() 
+            except Exception as e:
+                print(f"[DEBUG] _clear_main_plot tight_layout error: {e}")
 
-        selected_phase_name = params['selected_phase_plot']
-        if selected_phase_name != "Nenhuma" and selected_phase_name in all_plot_data_y and all_plot_data_y[selected_phase_name]:
-            phase_data_series = np.array(all_plot_data_y[selected_phase_name])
-            valid_phase_indices = ~np.isnan(phase_data_series)
-            if np.any(valid_phase_indices):
-                if not self.ax2_embedded or not self.ax2_embedded.figure: self.ax2_embedded = self.ax_embedded.twinx()
-                else: self.ax2_embedded.clear()
-                self.ax2_embedded.set_visible(True); phase_color=self.plot_colors[color_index % len(self.plot_colors)]
-                line_phase, = self.ax2_embedded.plot(frequencies[valid_phase_indices], phase_data_series[valid_phase_indices],
-                                                     marker='.', linestyle=':', markersize=2,color=phase_color, label=selected_phase_name)
-                self.ax2_embedded.set_ylabel(selected_phase_name,fontsize=9,color=phase_color); self.ax2_embedded.tick_params(axis='y',labelcolor=phase_color)
-                self.ax2_embedded.set_yscale('linear'); lines_plotted.append(line_phase); labels_plotted.append(selected_phase_name)
-        
-        title_parts = []
-        if params['selected_magnitude_plots']: title_parts.extend(params['selected_magnitude_plots'])
-        if params['selected_phase_plot'] != "Nenhuma": title_parts.append(params['selected_phase_plot'])
-        plot_title = (", ".join(title_parts) if title_parts else "Resposta") + f" vs Frequência ({params['topology']})"
-        self.ax_embedded.set_title(plot_title, fontsize=10); self.ax_embedded.set_xlabel("Frequência (Hz)", fontsize=9)
-        self.ax_embedded.grid(True, which="both", linestyle="--", linewidth=0.5); self.ax_embedded.tick_params(axis='both', which='major', labelsize=8)
+            # self.canvas_main_plot.draw() # REMOVIDO: Deixar a função de plotagem principal chamar draw()
+            print(f"[DEBUG] _clear_main_plot executado (sem draw). Mensagem: {message if message else 'Nenhuma'}")
 
-        if f0_resonance is not None and len(frequencies)>0 and frequencies[0]<=f0_resonance<=frequencies[-1]:
-            line_f0 = self.ax_embedded.axvline(x=f0_resonance, color='dimgray', linestyle='-.', linewidth=1.2)
-            if not any(l.get_label() == f'$f_0 \\approx$ {self._format_value(f0_resonance, "Hz")}' for l in lines_plotted if hasattr(l, 'get_label')):
-                 lines_plotted.append(line_f0); labels_plotted.append(f'$f_0 \\approx$ {self._format_value(f0_resonance, "Hz")}')
+
+    def _clear_static_circuit_diagram(self, initial_message=None, error_message=None):
+        if not self.circuit_diagram_canvas:
+            return
+        self.circuit_diagram_canvas.delete("all")
         
-        if extremum_info_main and params['selected_magnitude_plots']: # Somente se houver plots de magnitude
-            etype, efreq, evalue_raw, evalue_formatted = extremum_info_main
-            # A anotação será para a primeira grandeza de magnitude selecionada
-            first_mag_plot_name = params['selected_magnitude_plots'][0]
-            text_label=f"{etype.capitalize()} ({first_mag_plot_name}):\n{evalue_formatted}\n@ {self._format_value(efreq, 'Hz')}"
-            marker_color='darkgreen' if etype=='max' else 'indigo'
-            self.ax_embedded.plot(efreq, evalue_raw, marker='o', color=marker_color, markersize=5, fillstyle='none', markeredgewidth=1.2)
-            y_lim=self.ax_embedded.get_ylim();x_lim=self.ax_embedded.get_xlim()
-            y_range_plot=y_lim[1]-y_lim[0] if y_lim[1]>y_lim[0] else 1.0
-            if y_range_plot==0 or math.isinf(y_range_plot) or math.isnan(y_range_plot):y_range_plot=abs(evalue_raw) if evalue_raw!=0 else 1.0
-            offset_y_factor=0.05; offset_y=y_range_plot*offset_y_factor
-            text_y_pos=evalue_raw+(offset_y if etype=='max' else -offset_y*2.4)
-            ha_align='center';va_align='bottom' if etype=='max' else 'top'
-            if text_y_pos>y_lim[1]*0.95 and etype=='max':text_y_pos=evalue_raw-offset_y*2.4;va_align='top'
-            if text_y_pos<y_lim[0]+0.05*y_range_plot and etype=='min':text_y_pos=evalue_raw+offset_y;va_align='bottom'
-            self.ax_embedded.annotate(text_label,xy=(efreq,evalue_raw),xytext=(efreq,text_y_pos),arrowprops=dict(arrowstyle="-",connectionstyle="arc3,rad=0.1",color='gray',lw=0.7),fontsize=6,ha=ha_align,va=va_align,bbox=dict(boxstyle="round,pad=0.2",fc="whitesmoke",ec="lightgray",alpha=0.7))
+        # Tenta obter a cor de fundo do CTkFrame para o canvas
+        bg_color = self._get_ctk_bg_color()
+        self.circuit_diagram_canvas.configure(bg=bg_color)
+
+        # Tenta obter a cor do texto do CTkLabel
+        text_color = self._get_ctk_text_color()
         
-        if lines_plotted: self.ax_embedded.legend(lines_plotted, labels_plotted, loc='best', fontsize='xx-small')
+        canvas_width = self.circuit_diagram_canvas.winfo_width()
+        canvas_height = self.circuit_diagram_canvas.winfo_height()
+        if canvas_width <= 1 or canvas_height <= 1: # Canvas pode não ter sido desenhado ainda
+            canvas_width = 300 # Estimativa
+            canvas_height = 100 # Estimativa
+
+        message = initial_message or "Aguardando análise..."
+        fill_color = "red" if error_message else text_color
+        if error_message: message = error_message
+
+        self.circuit_diagram_canvas.create_text(
+            canvas_width / 2, canvas_height / 2,
+            text=message, font=("Arial", 10), fill=fill_color, anchor="center"
+        )
+        print(f"[DEBUG] _clear_static_circuit_diagram executado. Mensagem: {message}")
+
+    def _update_static_circuit_diagram(self, analysis_data):
+        if not self.circuit_diagram_canvas:
+            print("[DEBUG] Canvas do diagrama de circuito não existe.")
+            if hasattr(self, '_clear_static_circuit_diagram'):
+                 self._clear_static_circuit_diagram(error_message="Canvas não inicializado.")
+            return
+        if not analysis_data:
+            self._clear_static_circuit_diagram(error_message="Dados de análise ausentes.")
+            return
+
+        self.circuit_diagram_canvas.delete("all")
+        bg_color = self._get_ctk_bg_color()
+        line_color = self._get_ctk_text_color()
+        self.circuit_diagram_canvas.configure(bg=bg_color)
+
+        topology = analysis_data.get('topology', "Série")
+        r_val_data = analysis_data.get('r_val', 0)
+        l_val_data = analysis_data.get('l_val', 0)
+        c_val_data = analysis_data.get('c_val', 0)
+
+        r_active = self.include_r_var.get() and r_val_data > 1e-9
+        l_active = self.include_l_var.get() and l_val_data > 1e-9
+        c_active = self.include_c_var.get() and c_val_data > 1e-9
+
+        active_components = []
+        if r_active: active_components.append('R')
+        if l_active: active_components.append('L')
+        if c_active: active_components.append('C')
+
+        if not active_components and not analysis_data.get('v_source_phasor'):
+            self._clear_static_circuit_diagram(initial_message="Nenhum componente ativo para desenhar.")
+            return
+
+        canvas = self.circuit_diagram_canvas
+        # Ensure canvas dimensions are available
+        canvas.update_idletasks() 
+        cw = canvas.winfo_width()
+        ch = canvas.winfo_height()
         
-        try: self.fig_embedded.tight_layout(pad=0.5)
-        except Exception: 
-            try: self.fig_embedded.subplots_adjust(left=0.12, bottom=0.15, right=0.88 if self.ax2_embedded and self.ax2_embedded.get_visible() else 0.95, top=0.92)
-            except Exception: pass
-        self.canvas_embedded.draw()
+        if cw <= 1: cw = 400  # Fallback width
+        if ch <= 1: ch = 150  # Fallback height
+
+        padding = 20
+        comp_width, comp_height = 40, 40  # Base width for R, L; height reference
+        plate_gap_c = 5 # Actual width of capacitor symbol
+        source_radius = 15
+        y_center = ch / 2
+        x_start_source = padding + source_radius # Center of the source symbol
+
+        # Desenhar Fonte AC
+        canvas.create_oval(x_start_source - source_radius, y_center - source_radius,
+                           x_start_source + source_radius, y_center + source_radius, outline=line_color, width=2)
+        # Simple sine wave inside source
+        canvas.create_line(x_start_source - source_radius * 0.6, y_center,
+                           x_start_source - source_radius * 0.2, y_center - source_radius * 0.5,
+                           x_start_source + source_radius * 0.2, y_center + source_radius * 0.5,
+                           x_start_source + source_radius * 0.6, y_center,
+                           fill=line_color, width=1.5, smooth=True)
+        canvas.create_text(x_start_source, y_center + source_radius + 12, text="Vs", fill=line_color, font=("Arial", 9))
+
+        current_x = x_start_source + source_radius # Point where wire leaves the source
+
+        if topology == "Série":
+            # Initial wire from source
+            canvas.create_line(current_x, y_center, current_x + padding / 2, y_center, fill=line_color, width=1.5)
+            current_x += padding / 2
+
+            for comp_type in active_components:
+                # Fio antes do componente
+                canvas.create_line(current_x, y_center, current_x + padding / 2, y_center, fill=line_color, width=1.5)
+                current_x += padding / 2
+                
+                comp_draw_start_x = current_x
+
+                if comp_type == 'R':
+                    canvas.create_rectangle(comp_draw_start_x, y_center - comp_height / 3, comp_draw_start_x + comp_width, y_center + comp_height / 3, outline=line_color, width=2)
+                    r_val_str = self._format_value(r_val_data, "Ω")
+                    canvas.create_text(comp_draw_start_x + comp_width / 2, y_center + comp_height / 3 + 12, text=f"R\n{r_val_str}", fill=line_color, font=("Arial", 8), justify=tk.CENTER)
+                    current_x += comp_width
+                elif comp_type == 'L': # Bobina simples (3 arcos)
+                    arc_r = comp_height / 4
+                    canvas.create_arc(comp_draw_start_x, y_center - arc_r, comp_draw_start_x + comp_width / 3, y_center + arc_r, start=90, extent=180, style=tk.ARC, outline=line_color, width=2)
+                    canvas.create_arc(comp_draw_start_x + comp_width / 3, y_center - arc_r, comp_draw_start_x + 2 * comp_width / 3, y_center + arc_r, start=90, extent=180, style=tk.ARC, outline=line_color, width=2)
+                    canvas.create_arc(comp_draw_start_x + 2 * comp_width / 3, y_center - arc_r, comp_draw_start_x + comp_width, y_center + arc_r, start=90, extent=180, style=tk.ARC, outline=line_color, width=2)
+                    l_val_str = self._format_value(l_val_data, "H")
+                    canvas.create_text(comp_draw_start_x + comp_width / 2, y_center + arc_r + 12, text=f"L\n{l_val_str}", fill=line_color, font=("Arial", 8), justify=tk.CENTER)
+                    current_x += comp_width
+                elif comp_type == 'C':
+                    canvas.create_line(comp_draw_start_x, y_center - comp_height / 2, comp_draw_start_x, y_center + comp_height / 2, fill=line_color, width=2)
+                    canvas.create_line(comp_draw_start_x + plate_gap_c, y_center - comp_height / 2, comp_draw_start_x + plate_gap_c, y_center + comp_height / 2, fill=line_color, width=2)
+                    c_val_str = self._format_value(c_val_data, "F")
+                    canvas.create_text(comp_draw_start_x + plate_gap_c / 2, y_center + comp_height / 2 + 12, text=f"C\n{c_val_str}", fill=line_color, font=("Arial", 8), justify=tk.CENTER)
+                    current_x += plate_gap_c
+                
+                # Fio depois do componente
+                canvas.create_line(current_x, y_center, current_x + padding / 2, y_center, fill=line_color, width=1.5)
+                current_x += padding / 2
+            
+            # Return wire to the source
+            if active_components: # Only draw return if there were components
+                return_wire_y_top = padding
+                canvas.create_line(current_x, y_center, current_x, return_wire_y_top, fill=line_color, width=1.5)  # Up
+                canvas.create_line(current_x, return_wire_y_top, padding, return_wire_y_top, fill=line_color, width=1.5)  # Left
+                canvas.create_line(padding, return_wire_y_top, padding, y_center, fill=line_color, width=1.5)  # Down to source start
+            else: # Direct connection back if no components (e.g. source only)
+                 canvas.create_line(current_x, y_center, current_x, y_center - (ch/2 - padding), fill=line_color, width=1.5) 
+                 canvas.create_line(current_x, y_center - (ch/2 - padding), padding, y_center - (ch/2 - padding), fill=line_color, width=1.5) 
+                 canvas.create_line(padding, y_center - (ch/2 - padding), padding, y_center, fill=line_color, width=1.5)
+
+
+        elif topology == "Paralelo":
+            num_branches = len(active_components)
+            branch_spacing = (ch - 2 * padding) / (num_branches + 1) if num_branches > 0 else ch / 2
+
+            x_input_bar = current_x + padding # X-coordinate of the input vertical bar
+            x_output_bar = x_input_bar + comp_width + padding # X for output bar (comp_width is a general space for components)
+
+            # Wire from source to input bar
+            canvas.create_line(current_x, y_center, x_input_bar, y_center, fill=line_color, width=1.5)
+
+            if num_branches > 0:
+                # Input and Output vertical bars
+                canvas.create_line(x_input_bar, padding, x_input_bar, ch - padding, fill=line_color, width=1.5)
+                canvas.create_line(x_output_bar, padding, x_output_bar, ch - padding, fill=line_color, width=1.5)
+
+                for i, comp_type in enumerate(active_components):
+                    y_branch = padding + (i + 1) * branch_spacing
+                    
+                    # Start of component symbol on the branch
+                    x_comp_symbol_start = x_input_bar + padding / 2 
+
+                    # Wire from input bar to component
+                    canvas.create_line(x_input_bar, y_branch, x_comp_symbol_start, y_branch, fill=line_color, width=1.5)
+                    
+                    actual_width_drawn = 0
+                    if comp_type == 'R':
+                        canvas.create_rectangle(x_comp_symbol_start, y_branch - comp_height / 4, x_comp_symbol_start + comp_width, y_branch + comp_height / 4, outline=line_color, width=2)
+                        r_val_str = self._format_value(r_val_data, "Ω")
+                        canvas.create_text(x_comp_symbol_start + comp_width / 2, y_branch + comp_height / 4 + 12, text=f"R\n{r_val_str}", fill=line_color, font=("Arial", 8), justify=tk.CENTER)
+                        actual_width_drawn = comp_width
+                    elif comp_type == 'L':
+                        arc_r_p = comp_height / 5 
+                        canvas.create_arc(x_comp_symbol_start, y_branch - arc_r_p, x_comp_symbol_start + comp_width / 3, y_branch + arc_r_p, start=90, extent=180, style=tk.ARC, outline=line_color, width=2)
+                        canvas.create_arc(x_comp_symbol_start + comp_width / 3, y_branch - arc_r_p, x_comp_symbol_start + 2 * comp_width / 3, y_branch + arc_r_p, start=90, extent=180, style=tk.ARC, outline=line_color, width=2)
+                        canvas.create_arc(x_comp_symbol_start + 2 * comp_width / 3, y_branch - arc_r_p, x_comp_symbol_start + comp_width, y_branch + arc_r_p, start=90, extent=180, style=tk.ARC, outline=line_color, width=2)
+                        l_val_str = self._format_value(l_val_data, "H")
+                        canvas.create_text(x_comp_symbol_start + comp_width / 2, y_branch + arc_r_p + 12, text=f"L\n{l_val_str}", fill=line_color, font=("Arial", 8), justify=tk.CENTER)
+                        actual_width_drawn = comp_width
+                    elif comp_type == 'C':
+                        canvas.create_line(x_comp_symbol_start, y_branch - comp_height / 3, x_comp_symbol_start, y_branch + comp_height / 3, fill=line_color, width=2)
+                        canvas.create_line(x_comp_symbol_start + plate_gap_c, y_branch - comp_height / 3, x_comp_symbol_start + plate_gap_c, y_branch + comp_height / 3, fill=line_color, width=2)
+                        c_val_str = self._format_value(c_val_data, "F")
+                        canvas.create_text(x_comp_symbol_start + plate_gap_c / 2, y_branch + comp_height / 3 + 12, text=f"C\n{c_val_str}", fill=line_color, font=("Arial", 8), justify=tk.CENTER)
+                        actual_width_drawn = plate_gap_c
+                    
+                    # Wire from component to output bar
+                    canvas.create_line(x_comp_symbol_start + actual_width_drawn, y_branch, x_output_bar, y_branch, fill=line_color, width=1.5)
+
+                # Wire from output bar back to source
+                x_return_path_start = x_output_bar + padding / 2
+                canvas.create_line(x_output_bar, y_center, x_return_path_start, y_center, fill=line_color, width=1.5) # Right from output bar
+                return_wire_y_top = padding
+                canvas.create_line(x_return_path_start, y_center, x_return_path_start, return_wire_y_top, fill=line_color, width=1.5) # Up
+                canvas.create_line(x_return_path_start, return_wire_y_top, padding, return_wire_y_top, fill=line_color, width=1.5) # Left
+                canvas.create_line(padding, return_wire_y_top, padding, y_center, fill=line_color, width=1.5) # Down to source start
+            else: # No components, direct connection for parallel
+                canvas.create_line(x_input_bar, y_center, x_input_bar, y_center - (ch/2 - padding), fill=line_color, width=1.5) 
+                canvas.create_line(x_input_bar, y_center - (ch/2 - padding), padding, y_center - (ch/2 - padding), fill=line_color, width=1.5) 
+                canvas.create_line(padding, y_center - (ch/2 - padding), padding, y_center, fill=line_color, width=1.5)
+
+        print("[DEBUG] _update_static_circuit_diagram executado (com valores).")
+
+    def _update_phasor_diagram(self, analysis_data):
+        if not self.ax_main_plot or not analysis_data or not self.analysis_performed_successfully:
+            self._clear_main_plot(error_message="Dados insuficientes para fasores.")
+            return
+        
+        print("\n[DEBUG] Entrando em _update_phasor_diagram")
+        self.ax_main_plot.clear()
+        self.ax_main_plot.set_facecolor('white') # Resetar cor de fundo
+        self.fig_main_plot.patch.set_facecolor('white') # Resetar cor de fundo da figura
+
+        if self.ax_main_plot_twin and self.ax_main_plot_twin.figure:
+            self.ax_main_plot_twin.set_visible(False)
+
+        current_topology = analysis_data.get('topology')
+
+        phasors_to_plot = {
+            # Tensões nos componentes equivalentes
+            "$V_R$": analysis_data.get('v_r_phasor') if self.include_r_var.get() and analysis_data.get('r_val',0)>1e-12 else None,
+            "$V_L$": analysis_data.get('v_l_phasor') if self.include_l_var.get() and analysis_data.get('l_val',0)>1e-12 else None,
+            "$V_C$": analysis_data.get('v_c_phasor') if self.include_c_var.get() and analysis_data.get('c_val',0)>1e-12 else None,
+            # Tensão da Fonte
+            "$V_S$ (Fonte)": analysis_data.get('v_source_phasor'),
+            # Corrente Total
+            "$I_T$ (Total)": analysis_data.get('i_total_phasor'),
+        }
+
+        # Adicionar correntes de ramo para topologia Paralelo
+        if current_topology == "Paralelo":
+            if self.include_r_var.get() and analysis_data.get('r_val',0) > 1e-12:
+                phasors_to_plot["$I_R$"] = analysis_data.get('i_r_phasor') # Legenda simplificada
+            if self.include_l_var.get() and analysis_data.get('l_val',0) > 1e-12:
+                phasors_to_plot["$I_L$"] = analysis_data.get('i_l_phasor') # Legenda simplificada
+            if self.include_c_var.get() and analysis_data.get('c_val',0) > 1e-12:
+                phasors_to_plot["$I_C$"] = analysis_data.get('i_c_phasor') # Legenda simplificada
+
+        # Definir cores e estilos
+        # Usaremos um esquema de cores base e modificaremos o estilo para correntes de ramo
+        base_colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkcyan', 'magenta', 'saddlebrown', 'olive', 'darkslateblue']
+        max_val=0; plotted_arrows=[]; plotted_labels=[]
+
+        for i,(label,phasor) in enumerate(phasors_to_plot.items()):
+            if phasor is not None and abs(phasor)>1e-9:
+                x,y=phasor.real,phasor.imag; mag_ph=abs(phasor)
+                hw=0.04*mag_ph if mag_ph>1e-9 else 0.01; hl=0.08*mag_ph if mag_ph>1e-9 else 0.02 # Ajustado para setas um pouco menores
+                if hw == 0: hw = 0.01
+                if hl == 0: hl = 0.02
+
+                color = base_colors[i % len(base_colors)]
+                linestyle = '-' # Padrão
+                linewidth = 1.5
+
+                # Distinguir correntes de ramo (I_R, I_L, I_C) - não I_T
+                if label in ["$I_R$", "$I_L$", "$I_C$"]:
+                    linestyle = '--' # Tracejado para correntes de ramo
+                    linewidth = 1.2
+                    # Para garantir cores diferentes para I_R, I_L, I_C mesmo se V_R, V_L, V_C não forem plotados,
+                    # podemos ajustar o índice de cor ou ter um conjunto de cores separado para correntes.
+                    # Por simplicidade, o esquema atual de cores sequenciais é mantido.
+                # Para I_T, podemos dar um destaque
+                if label == "$I_T$ (Total)":
+                    linewidth = 2.0
+
+                arrow=self.ax_main_plot.arrow(0,0,x,y,head_width=hw,head_length=hl,
+                                              fc=color, ec=color, 
+                                              linestyle=linestyle, linewidth=linewidth,
+                                              length_includes_head=True,zorder=i+5)
+                plotted_arrows.append(arrow); plotted_labels.append(f"{label}: {self.format_phasor(phasor)}"); max_val=max(max_val,abs(x),abs(y),mag_ph)
+        
+        if not plotted_arrows: # Se nenhum fasor foi plotado
+            print("[DEBUG] Nenhum fasor significativo para plotar.")
+            self._clear_main_plot(initial_message="Nenhum fasor significativo para exibir.")
+            return
+
+        if max_val==0:max_val=1 
+        limit=max_val*1.2; self.ax_main_plot.set_xlim(-limit,limit); self.ax_main_plot.set_ylim(-limit,limit)
+        self.ax_main_plot.set_xlabel("Componente Real"); self.ax_main_plot.set_ylabel("Componente Imaginário"); self.ax_main_plot.set_title("Diagrama Fasorial")
+        self.ax_main_plot.axhline(0,color='black',lw=0.5); self.ax_main_plot.axvline(0,color='black',lw=0.5); self.ax_main_plot.grid(True,ls=':',alpha=0.7); self.ax_main_plot.set_aspect('equal',adjustable='box')
+        self.ax_main_plot.legend(plotted_arrows,plotted_labels,loc='best',fontsize='x-small')
+        try: self.fig_main_plot.tight_layout()
+        except RuntimeError: # Pode acontecer se o layout estiver muito restrito
+            print(f"[DEBUG] _update_phasor_diagram tight_layout error (RuntimeError).")
+        except Exception as e: print(f"[DEBUG] _update_phasor_diagram tight_layout error: {e}")
+        self.canvas_main_plot.draw()
+        print("[DEBUG] Diagrama fasorial desenhado.")
 
     def format_phasor(self, complex_val, unit=""):
-        if abs(complex_val) == float('inf'): return f"Infinito {unit}"
-        mag = abs(complex_val); phase_rad = cmath.phase(complex_val)
-        if mag < 1e-12: phase_rad = 0.0
-        mag_formatted = self._format_value(mag) 
-        if self.angle_unit.get() == "degrees":
-            phase_display = math.degrees(phase_rad); angle_symbol = "°"
-        else: 
-            phase_display = phase_rad; angle_symbol = " rad"
-        phase_formatted = self._format_value(phase_display) 
-        return f"{mag_formatted} {unit} ∠ {phase_formatted}{angle_symbol}"
+        if not isinstance(complex_val, complex) or cmath.isinf(complex_val) or cmath.isnan(complex_val): return self._format_value(complex_val, unit)
+        mag=abs(complex_val); phase_rad=cmath.phase(complex_val)
+        if mag<1e-12: phase_rad=0.0
+        mag_fmt=self._format_value(mag)
+        phase_disp=math.degrees(phase_rad) if self.angle_unit.get()=="degrees" else phase_rad
+        angle_sym="°" if self.angle_unit.get()=="degrees" else " rad"
+        if abs(phase_disp)<1e-9: phase_disp=0.0
+        phase_fmt=self._format_value(phase_disp)
+        return f"{mag_fmt} {unit} ∠ {phase_fmt}{angle_sym}"
 
 if __name__ == '__main__':
     root = ctk.CTk()
