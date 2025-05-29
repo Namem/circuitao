@@ -6,6 +6,7 @@ import math
 import numpy as np
 import json
 import re
+import copy # Added for deepcopying diagram data
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -83,8 +84,24 @@ class ACCircuitAnalyzerApp:
         self.wire_preview_line_id = None
         self.wires_on_canvas = [] # Stores successfully drawn wires
         self.next_wire_id = 0
+        self.currently_selected_wire_id = None
+        self.wire_selection_color = "red" 
+        self.wire_default_color = "black"
 
         self.wire_hit_radius = 10 # Pixel radius for detecting a click on a terminal
+        # --- Grid and Snap Settings ---
+        self.grid_spacing = 20  # Espaçamento da grade em pixels
+        self.grid_color = "lightgrey" # Cor das linhas da grade
+        self.snap_to_grid_enabled = tk.BooleanVar(value=True) # Flag para habilitar/desabilitar o snap
+        # --- Zoom Settings ---
+        self.current_zoom_level = 1.0
+        self.zoom_factor_increment = 1.1 # Fator para zoom in (ex: 10% de aumento)
+        self.zoom_factor_decrement = 1 / 1.1 # Fator para zoom out (ex: 10% de redução)
+        # --- Pan Settings ---
+        self.is_panning = False
+        self.pan_start_x = 0
+        self.pan_start_y = 0
+        # self.grid_line_ids = [] # Using tags is generally better for managing grid lines
 
         main_app_frame = ctk.CTkFrame(master_window, fg_color="transparent")
         main_app_frame.pack(expand=True, fill="both", padx=5, pady=5)
@@ -326,6 +343,18 @@ class ACCircuitAnalyzerApp:
         self.btn_gnd_tool = ctk.CTkButton(palette_frame, text="Terra (GND)", command=lambda: self._select_tool("GND"))
         self.btn_gnd_tool.pack(pady=5, padx=10, fill="x")
 
+        self.btn_vcvs_tool = ctk.CTkButton(palette_frame, text="VCVS (E)", command=lambda: self._select_tool("VCVS"))
+        self.btn_vcvs_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_vccs_tool = ctk.CTkButton(palette_frame, text="VCCS (G)", command=lambda: self._select_tool("VCCS"))
+        self.btn_vccs_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_ccvs_tool = ctk.CTkButton(palette_frame, text="CCVS (H)", command=lambda: self._select_tool("CCVS"))
+        self.btn_ccvs_tool.pack(pady=5, padx=10, fill="x")
+
+        self.btn_cccs_tool = ctk.CTkButton(palette_frame, text="CCCS (F)", command=lambda: self._select_tool("CCCS"))
+        self.btn_cccs_tool.pack(pady=5, padx=10, fill="x")
+
         # Wire tool will be handled later
         self.btn_wire_tool = ctk.CTkButton(palette_frame, text="Fio (Wire)", command=lambda: self._select_tool("WIRE"))
         self.btn_wire_tool.pack(pady=5, padx=10, fill="x")
@@ -333,6 +362,19 @@ class ACCircuitAnalyzerApp:
         # Botão para Gerar Netlist
         self.btn_generate_netlist = ctk.CTkButton(palette_frame, text="Gerar Netlist", command=self._initiate_netlist_generation)
         self.btn_generate_netlist.pack(pady=(20,5), padx=10, fill="x")
+
+        # Botão para Salvar Diagrama
+        self.btn_save_diagram = ctk.CTkButton(palette_frame, text="Salvar Diagrama", command=self._prompt_save_diagram_as)
+        self.btn_save_diagram.pack(pady=5, padx=10, fill="x")
+
+        # Botão para Carregar Diagrama
+        self.btn_load_diagram = ctk.CTkButton(palette_frame, text="Carregar Diagrama", command=self._prompt_load_diagram)
+        self.btn_load_diagram.pack(pady=5, padx=10, fill="x")
+
+        # Checkbox para Snap-to-Grid
+        self.snap_to_grid_checkbox = ctk.CTkCheckBox(palette_frame, text="Snap à Grade", variable=self.snap_to_grid_enabled,
+                                                     onvalue=True, offvalue=False)
+        self.snap_to_grid_checkbox.pack(pady=(10,5), padx=10, fill="x")
 
         # --- Painel do Canvas de Desenho (Direita) para a aba Editor ---
         canvas_frame = ctk.CTkFrame(tab_editor, corner_radius=0, fg_color="transparent")
@@ -350,12 +392,110 @@ class ACCircuitAnalyzerApp:
         self.editor_canvas.bind("<Escape>", self._on_escape_key_press)
         self.editor_canvas.bind("<Delete>", self._on_delete_key_press)
         self.editor_canvas.bind("<Motion>", self._update_wire_preview) # For wire preview
+        self.editor_canvas.bind("<Configure>", lambda event: self._draw_editor_grid()) # Redraw grid on resize
+        # Bind mouse wheel events for zoom
+        self.editor_canvas.bind("<MouseWheel>", self._handle_mouse_zoom)  # For Windows and macOS
+        self.editor_canvas.bind("<Button-4>", self._handle_mouse_zoom)    # For Linux (scroll up)
+        self.editor_canvas.bind("<Button-5>", self._handle_mouse_zoom)    # For Linux (scroll down)
+        # Bind middle mouse button events for panning
+        self.editor_canvas.bind("<ButtonPress-2>", self._on_pan_start)
+        self.editor_canvas.bind("<B2-Motion>", self._on_pan_motion)
+        self.editor_canvas.bind("<ButtonRelease-2>", self._on_pan_release)
+        # You might need to test <ButtonPress-3> etc. if <Button-2> doesn't work for your middle mouse button
+
 
         self._clear_main_plot(initial_message="Diagrama Fasorial: Insira netlist e analise.")
         self._clear_static_circuit_diagram(initial_message="Diagrama do Circuito: Aguardando análise via netlist.")
 
         self.master.after(10, self._on_include_component_change)
         self._on_include_component_change()
+        self.master.after(50, self._draw_editor_grid) # Initial grid draw after UI is likely settled
+
+    def _draw_editor_grid(self):
+        """Draws the grid on the editor canvas."""
+        self.editor_canvas.delete("grid_line_tag") # Clear previous grid lines
+
+        # It's important to call update_idletasks to ensure winfo_width/height are accurate
+        # especially if called early or from <Configure> before full layout.
+        self.editor_canvas.update_idletasks()
+        
+        canvas_width = self.editor_canvas.winfo_width()
+        canvas_height = self.editor_canvas.winfo_height()
+
+        if canvas_width <= 1 or canvas_height <= 1: # Canvas not yet sized
+            return
+
+        # Draw vertical lines
+        for x_grid in range(0, canvas_width, self.grid_spacing):
+            self.editor_canvas.create_line(x_grid, 0, x_grid, canvas_height,
+                                           fill=self.grid_color, tags="grid_line_tag")
+        # Draw horizontal lines
+        for y_grid in range(0, canvas_height, self.grid_spacing):
+            self.editor_canvas.create_line(0, y_grid, canvas_width, y_grid,
+                                           fill=self.grid_color, tags="grid_line_tag")
+
+        self.editor_canvas.tag_lower("grid_line_tag") # Send grid lines to the bottom
+
+    def _snap_to_grid_coords(self, x, y):
+        """Snaps the given x, y coordinates to the nearest grid intersection."""
+        if not self.snap_to_grid_enabled.get() or self.grid_spacing <= 0:
+            return int(x), int(y) # Return as int even if not snapping
+        
+        snapped_x = round(x / self.grid_spacing) * self.grid_spacing
+        snapped_y = round(y / self.grid_spacing) * self.grid_spacing
+        return int(snapped_x), int(snapped_y)
+
+    def _handle_mouse_zoom(self, event):
+        """Handles mouse wheel scrolling for zooming the editor canvas."""
+        scale_factor = 1.0
+        
+        # Determine scroll direction and set scale_factor
+        if event.num == 4 or event.delta > 0:  # Linux scroll up or Windows/macOS scroll up
+            scale_factor = self.zoom_factor_increment
+        elif event.num == 5 or event.delta < 0:  # Linux scroll down or Windows/macOS scroll down
+            scale_factor = self.zoom_factor_decrement
+        else: # Unrecognized event
+            return
+
+        if scale_factor != 1.0:
+            # The canvas coordinates (event.x, event.y) are the origin for scaling
+            # Need to convert widget-relative (event.x, event.y) to canvas-relative if canvas is scrolled (panning)
+            # For now, assuming no panning, event.x, event.y are fine.
+            # If panning is implemented, use:
+            # canvas_x = self.editor_canvas.canvasx(event.x)
+            # canvas_y = self.editor_canvas.canvasy(event.y)
+            # self.editor_canvas.scale("all", canvas_x, canvas_y, scale_factor, scale_factor)
+            
+            self.editor_canvas.scale("all", event.x, event.y, scale_factor, scale_factor)
+            self.current_zoom_level *= scale_factor
+            
+            # print(f"Zoom Level: {self.current_zoom_level:.2f} at ({event.x}, {event.y})") # For debugging
+
+            # The grid lines (tagged "grid_line_tag") are scaled by "all".
+            # If more sophisticated grid behavior is needed (e.g., constant visual spacing),
+            # then _draw_editor_grid would need to be called and made zoom-aware.
+
+    def _on_pan_start(self, event):
+        """Handles the start of a canvas pan operation (middle mouse button press)."""
+        self.is_panning = True
+        self.pan_start_x = event.x
+        self.pan_start_y = event.y
+        self.editor_canvas.scan_mark(event.x, event.y)
+        self.editor_canvas.config(cursor="fleur") # Change cursor to indicate panning
+
+    def _on_pan_motion(self, event):
+        """Handles the canvas pan operation during mouse motion."""
+        if self.is_panning:
+            self.editor_canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def _on_pan_release(self, event):
+        """Handles the end of a canvas pan operation (middle mouse button release)."""
+        if self.is_panning:
+            self.is_panning = False
+            self.editor_canvas.config(cursor="") # Reset cursor to default
+
+
+    # --- Canvas Interaction Methods (Click, Drag, etc.) ---
 
     def _on_canvas_drag_start(self, event):
         self.editor_canvas.focus_set() # Ensure canvas has focus for keyboard events
@@ -372,7 +512,9 @@ class ACCircuitAnalyzerApp:
                 self._try_finalize_wire(event.x, event.y)
             return # Prevent further processing if WIRE tool is active
         elif self.selected_component_tool is not None: # Note: elif here
-            self._add_element_on_canvas(event) # This will reset selected_component_tool
+            # Snap the initial click position for adding an element
+            snapped_x, snapped_y = self._snap_to_grid_coords(event.x, event.y)
+            self._add_element_on_canvas(snapped_x, snapped_y) # Pass snapped coords
             self.is_dragging = False # Ensure not dragging a newly added component
         else:
             # No tool active, try to select an existing component
@@ -401,21 +543,37 @@ class ACCircuitAnalyzerApp:
                     element_to_move = el
                     break
             
-            if element_to_move:
-                # Move the graphical items on the canvas
-                for item_canvas_id in element_to_move["canvas_item_ids"]:
-                    self.editor_canvas.move(item_canvas_id, dx, dy)
-                
-                # Update the stored coordinates of the element
-                element_to_move["x"] += dx
-                element_to_move["y"] += dy
+            if not element_to_move: return
 
-                # Now, update the wires connected
+            current_center_x, current_center_y = element_to_move['x'], element_to_move['y']
+
+            # Mouse displacement since the last motion event
+            mouse_dx = event.x - self.drag_start_mouse_x
+            mouse_dy = event.y - self.drag_start_mouse_y
+
+            # New theoretical position (element's current center + mouse delta)
+            new_theoretical_x = current_center_x + mouse_dx
+            new_theoretical_y = current_center_y + mouse_dy
+
+            # Apply snap to the new theoretical position
+            snapped_x, snapped_y = self._snap_to_grid_coords(new_theoretical_x, new_theoretical_y)
+
+            # Calculate the actual delta to move canvas items (from old snapped position to new snapped position)
+            actual_dx_to_move_items = snapped_x - current_center_x
+            actual_dy_to_move_items = snapped_y - current_center_y
+
+            if actual_dx_to_move_items != 0 or actual_dy_to_move_items != 0:
+                for item_canvas_id in element_to_move["canvas_item_ids"]:
+                    self.editor_canvas.move(item_canvas_id, actual_dx_to_move_items, actual_dy_to_move_items)
+                
+                element_to_move["x"] = snapped_x
+                element_to_move["y"] = snapped_y
+
+                # Update connected wires (this logic was already part of the original method)
                 wires_to_update_ids = set()
                 for terminal in element_to_move.get("terminals", []):
                     for wire_id in terminal.get("connected_wire_ids", []):
                         wires_to_update_ids.add(wire_id)
-
                 for wire_id_to_update in wires_to_update_ids:
                     wire_object = next((w for w in self.wires_on_canvas if w["id"] == wire_id_to_update), None)
                     if wire_object:
@@ -425,10 +583,9 @@ class ACCircuitAnalyzerApp:
                         if start_coords and end_coords:
                             self.editor_canvas.coords(wire_object['canvas_line_id'],
                                                       start_coords[0], start_coords[1], end_coords[0], end_coords[1])
-
-                # Update the drag start position for the next relative move
-                self.drag_start_mouse_x = event.x
-                self.drag_start_mouse_y = event.y
+            # Update the reference mouse position for the next motion event calculation
+            self.drag_start_mouse_x = event.x
+            self.drag_start_mouse_y = event.y
 
     def _on_canvas_drag_release(self, event):
         if self.is_dragging:
@@ -614,11 +771,11 @@ class ACCircuitAnalyzerApp:
             self._edit_element_properties(element_id_to_edit)
 
     def _handle_selection(self, event):
-        items_nearby = self.editor_canvas.find_closest(event.x, event.y, halo=5)
+        items_nearby_comp = self.editor_canvas.find_closest(event.x, event.y, halo=5) # For components
         
         element_id_to_select = None
-        if items_nearby:
-            item_id = items_nearby[0] # Get the ID of the closest graphical item
+        if items_nearby_comp:
+            item_id = items_nearby_comp[0] # Get the ID of the closest graphical item
             tags = self.editor_canvas.gettags(item_id)
             
             # Check if the item is a main component symbol and has a valid ID
@@ -629,11 +786,32 @@ class ACCircuitAnalyzerApp:
                     element_id_to_select = potential_element_id
         
         if element_id_to_select:
+            self._deselect_all_wires() 
             self._select_element(element_id_to_select)
         else:
-            self._deselect_all_elements()
+            # No component selected, try to select a wire
+            items_nearby_wire = self.editor_canvas.find_closest(event.x, event.y, halo=3) # Smaller halo for wires
+            wire_id_to_select = None
+            if items_nearby_wire:
+                item_id = items_nearby_wire[0]
+                tags = self.editor_canvas.gettags(item_id)
+                if "wire" in tags:
+                    # The second tag should be the unique wire ID
+                    for tag_idx, tag_val in enumerate(tags):
+                        if tag_idx == 1 and tag_val.startswith("wire_") and any(w["id"] == tag_val for w in self.wires_on_canvas):
+                            wire_id_to_select = tag_val
+                            break
+            
+            if wire_id_to_select:
+                self._deselect_all_elements() 
+                self._select_wire(wire_id_to_select)
+            else: # Clicked on empty space
+                self._deselect_all_elements()
+                self._deselect_all_wires()
 
     def _select_element(self, element_id_to_select):
+        self._deselect_all_wires() # Ensure no wire is selected
+
         if self.currently_selected_element_id == element_id_to_select:
             return # Already selected
 
@@ -677,6 +855,43 @@ class ACCircuitAnalyzerApp:
                     print(f"Elemento deselecionado: {element_id_to_deselect}")
                     break
 
+    def _select_wire(self, wire_id_to_select):
+        self._deselect_all_elements() # Ensure no component is selected
+
+        if self.currently_selected_wire_id == wire_id_to_select:
+            return # Already selected
+
+        if self.currently_selected_wire_id:
+            self._deselect_all_wires() # Deselect the old one
+
+        self.currently_selected_wire_id = wire_id_to_select
+        
+        wire_object = next((w for w in self.wires_on_canvas if w["id"] == self.currently_selected_wire_id), None)
+        if wire_object:
+            try:
+                self.editor_canvas.itemconfig(wire_object['canvas_line_id'], 
+                                              fill=self.wire_selection_color, 
+                                              width=3) # Make selected wire thicker
+                print(f"Fio selecionado: {wire_object['id']}")
+            except tk.TclError as e:
+                print(f"Erro ao tentar destacar o fio {wire_object['id']}: {e}")
+        else:
+            print(f"Erro: Fio com ID '{self.currently_selected_wire_id}' não encontrado para seleção.")
+            self.currently_selected_wire_id = None # Reset if not found
+
+    def _deselect_all_wires(self):
+        if self.currently_selected_wire_id:
+            wire_id_to_deselect = self.currently_selected_wire_id
+            self.currently_selected_wire_id = None 
+            
+            wire_object = next((w for w in self.wires_on_canvas if w["id"] == wire_id_to_deselect), None)
+            if wire_object:
+                try:
+                    self.editor_canvas.itemconfig(wire_object['canvas_line_id'], fill=self.wire_default_color, width=2)
+                    print(f"Fio deselecionado: {wire_id_to_deselect}")
+                except tk.TclError as e:
+                    print(f"Aviso: Erro ao tentar restaurar aparência do fio {wire_id_to_deselect} (pode já ter sido deletado): {e}")
+
     def _edit_element_properties(self, element_id):
         element = next((el for el in self.circuit_elements_on_canvas if el["id"] == element_id), None)
         if not element:
@@ -703,31 +918,157 @@ class ACCircuitAnalyzerApp:
         elif element_type == "IS":
             # For IS, just magnitude string for now
             prompt_text = f"Valor da Corrente ({element_id}) [Ex: 1A, 0.5A 30deg]:"
+        elif element_type == "VCVS":
+            # For VCVS, we'll handle multiple properties sequentially
+            pass # Special handling below
+        elif element_type == "VCCS":
+            # For VCCS, similar multi-property handling
+            pass # Special handling below
+        elif element_type == "CCVS":
+            # For CCVS, multi-property handling
+            pass # Special handling below
         elif element_type == "GND":
+            print(f"Não é possível editar propriedades de um elemento {element_type}.")
+            return # GND has no editable value in this context
             print(f"Não é possível editar propriedades de um elemento {element_type}.")
             return # GND has no editable value in this context
         else:
              print(f"Edição de propriedades não implementada para o tipo '{element_type}'.")
              return
 
-        # Use CTkInputDialog to get the new value
-        dialog = ctk.CTkInputDialog(text=prompt_text, title=prompt_title)
-        # To pre-fill the dialog (optional): dialog.entry.insert(0, current_value)
-        new_value_str = dialog.get_input()
+        if element_type == "VCVS":
+            # Get Gain
+            gain_dialog = ctk.CTkInputDialog(text=f"Ganho de Tensão (V/V) para {element_id}:", title="Editar Ganho VCVS")
+            new_gain_str = gain_dialog.get_input()
+            if new_gain_str is not None and new_gain_str.strip() != "":
+                element['properties']['value'] = new_gain_str.strip() # 'value' stores gain for VCVS
+            else: # Cancelled or empty
+                print(f"Edição do ganho para '{element_id}' cancelada ou vazia.")
+                return # Stop if gain is not provided
 
-        if new_value_str is not None: # User didn't cancel
-            new_value_str = new_value_str.strip()
-            if new_value_str != "":
-                # Store the new value (basic string storage for now)
-                # More robust parsing (1k, 1u, etc.) and validation can be added later
-                # if you need to convert these to numerical values for simulation from the editor.
-                element['properties']['value'] = new_value_str
-                self._update_element_label(element_id)
-                print(f"Propriedade 'value' de '{element_id}' atualizada para: '{new_value_str}'")
+            # Get Control Node Positive
+            ctrl_p_dialog = ctk.CTkInputDialog(text=f"Nó de Controle Positivo (+) para {element_id}:", title="Editar Nó Controle VCVS")
+            new_ctrl_p_str = ctrl_p_dialog.get_input()
+            if new_ctrl_p_str is not None and new_ctrl_p_str.strip() != "":
+                element['properties']['ctrl_node_p'] = new_ctrl_p_str.strip()
             else:
-                 # User entered empty string, could choose to clear value or ignore
-                 print(f"Entrada vazia para '{element_id}'. Valor não alterado (ou poderia ser limpo).")
-        # else: User cancelled the dialog
+                print(f"Edição do nó de controle '+' para '{element_id}' cancelada ou vazia.")
+                return
+
+            # Get Control Node Negative
+            ctrl_n_dialog = ctk.CTkInputDialog(text=f"Nó de Controle Negativo (-) para {element_id}:", title="Editar Nó Controle VCVS")
+            new_ctrl_n_str = ctrl_n_dialog.get_input()
+            if new_ctrl_n_str is not None and new_ctrl_n_str.strip() != "":
+                element['properties']['ctrl_node_n'] = new_ctrl_n_str.strip()
+            else:
+                print(f"Edição do nó de controle '-' para '{element_id}' cancelada ou vazia.")
+                return
+            
+            self._update_element_label(element_id)
+            print(f"Propriedades de '{element_id}' (VCVS) atualizadas: Ganho='{element['properties']['value']}', Ctrl+='{element['properties']['ctrl_node_p']}', Ctrl-='{element['properties']['ctrl_node_n']}'")
+
+        elif element_type == "VCCS":
+            # Get Transconductance (Gm)
+            gm_dialog = ctk.CTkInputDialog(text=f"Transcondutância (Gm - Siemens) para {element_id}:", title="Editar Gm VCCS")
+            new_gm_str = gm_dialog.get_input()
+            if new_gm_str is not None and new_gm_str.strip() != "":
+                element['properties']['value'] = new_gm_str.strip() # 'value' stores Gm for VCCS
+            else:
+                print(f"Edição da transcondutância para '{element_id}' cancelada ou vazia.")
+                return
+
+            # Get Control Node Positive
+            ctrl_p_dialog_vccs = ctk.CTkInputDialog(text=f"Nó de Controle Positivo (+) para {element_id}:", title="Editar Nó Controle VCCS")
+            new_ctrl_p_vccs_str = ctrl_p_dialog_vccs.get_input()
+            if new_ctrl_p_vccs_str is not None and new_ctrl_p_vccs_str.strip() != "":
+                element['properties']['ctrl_node_p'] = new_ctrl_p_vccs_str.strip()
+            else:
+                print(f"Edição do nó de controle '+' para '{element_id}' (VCCS) cancelada ou vazia.")
+                return
+
+            # Get Control Node Negative
+            ctrl_n_dialog_vccs = ctk.CTkInputDialog(text=f"Nó de Controle Negativo (-) para {element_id}:", title="Editar Nó Controle VCCS")
+            new_ctrl_n_vccs_str = ctrl_n_dialog_vccs.get_input()
+            if new_ctrl_n_vccs_str is not None and new_ctrl_n_vccs_str.strip() != "":
+                element['properties']['ctrl_node_n'] = new_ctrl_n_vccs_str.strip()
+            else:
+                print(f"Edição do nó de controle '-' para '{element_id}' (VCCS) cancelada ou vazia.")
+                return
+            
+            self._update_element_label(element_id)
+            print(f"Propriedades de '{element_id}' (VCCS) atualizadas: Gm='{element['properties']['value']}', Ctrl+='{element['properties']['ctrl_node_p']}', Ctrl-='{element['properties']['ctrl_node_n']}'")
+
+        elif element_type == "CCVS":
+            # Get Transresistance (Rm)
+            rm_dialog = ctk.CTkInputDialog(text=f"Transresistência (Rm - Ohms) para {element_id}:", title="Editar Rm CCVS")
+            new_rm_str = rm_dialog.get_input()
+            if new_rm_str is not None and new_rm_str.strip() != "":
+                element['properties']['value'] = new_rm_str.strip() # 'value' stores Rm for CCVS
+            else:
+                print(f"Edição da transresistência para '{element_id}' (CCVS) cancelada ou vazia.")
+                return
+
+            # Get Control Source Name (VS name)
+            ctrl_src_dialog_ccvs = ctk.CTkInputDialog(text=f"Nome da Fonte VS de Controle para {element_id} (Ex: VS1):", title="Editar Fonte Controle CCVS")
+            new_ctrl_src_ccvs_str = ctrl_src_dialog_ccvs.get_input()
+            if new_ctrl_src_ccvs_str is not None and new_ctrl_src_ccvs_str.strip() != "":
+                element['properties']['control_source_name'] = new_ctrl_src_ccvs_str.strip()
+            else:
+                print(f"Edição do nome da fonte de controle para '{element_id}' (CCVS) cancelada ou vazia.")
+                return
+            
+            self._update_element_label(element_id)
+            print(f"Propriedades de '{element_id}' (CCVS) atualizadas: Rm='{element['properties']['value']}', CtrlVS='{element['properties']['control_source_name']}'")
+
+        elif element_type == "CCCS":
+            # Editar Ganho de Corrente (Beta)
+            current_beta = str(element['properties'].get('value', '100'))
+            gain_dialog_cccs = ctk.CTkInputDialog(
+                text=f"Novo Ganho de Corrente (Beta) para {element_id}:",
+                title="Editar Ganho CCCS"
+            )
+            gain_dialog_cccs.entry.insert(0, current_beta)
+            new_gain_str_cccs = gain_dialog_cccs.get_input()
+            if new_gain_str_cccs is not None and new_gain_str_cccs.strip() != "":
+                element['properties']['value'] = new_gain_str_cccs.strip()
+            # else: User cancelled or entered empty, keep current_beta
+
+            # Editar Nome da Fonte VS de Controle
+            current_ctrl_src_cccs = str(element['properties'].get('control_source_name', 'VS_monitor?'))
+            ctrl_src_dialog_cccs = ctk.CTkInputDialog(
+                text=f"Nome da Fonte VS de Controle para {element_id} (Ex: VS1):",
+                title="Editar Fonte de Controle CCCS"
+            )
+            ctrl_src_dialog_cccs.entry.insert(0, current_ctrl_src_cccs)
+            new_ctrl_src_name_cccs = ctrl_src_dialog_cccs.get_input()
+            if new_ctrl_src_name_cccs is not None and new_ctrl_src_name_cccs.strip() != "":
+                element['properties']['control_source_name'] = new_ctrl_src_name_cccs.strip()
+            # else: User cancelled or entered empty, keep current_ctrl_src_cccs
+            
+            self._update_element_label(element_id)
+            print(f"Propriedades de '{element_id}' (CCCS) atualizadas: Beta='{element['properties']['value']}', CtrlVS='{element['properties']['control_source_name']}'")
+        else: # For other components
+            # Use CTkInputDialog to get the new value
+            dialog = ctk.CTkInputDialog(text=prompt_text, title=prompt_title)
+            dialog.entry.insert(0, str(current_value)) # Pre-fill with current value
+            # To pre-fill the dialog (optional): dialog.entry.insert(0, current_value)
+            new_value_str = dialog.get_input()
+
+            if new_value_str is not None: # User didn't cancel
+                new_value_str = new_value_str.strip()
+                if new_value_str != "":
+                    # Store the new value (basic string storage for now)
+                    element['properties']['value'] = new_value_str
+                    self._update_element_label(element_id)
+                    print(f"Propriedade 'value' de '{element_id}' atualizada para: '{new_value_str}'")
+                else:
+                    # User entered empty string, could choose to clear value or ignore
+                    print(f"Entrada vazia para '{element_id}'. Valor não alterado (ou poderia ser limpo).")
+            # else: User cancelled the dialog
+
+        # Common update call if not a controlled source (they update label inside their blocks)
+        if element_type not in ["VCVS", "VCCS", "CCVS", "CCCS"]:
+                self._update_element_label(element_id)
 
     def _delete_selected_element(self):
         if self.currently_selected_element_id is None:
@@ -796,13 +1137,52 @@ class ACCircuitAnalyzerApp:
             print(f"Erro: Elemento selecionado com ID '{self.currently_selected_element_id}' não encontrado na lista para deleção.")
             self.currently_selected_element_id = None # Clear the invalid selection ID
 
+    def _delete_selected_wire(self):
+        if self.currently_selected_wire_id is None:
+            print("Nenhum fio selecionado para deletar.")
+            return
+
+        wire_to_delete = None
+        wire_index = -1
+        for i, w_obj in enumerate(self.wires_on_canvas):
+            if w_obj["id"] == self.currently_selected_wire_id:
+                wire_to_delete = w_obj
+                wire_index = i
+                break
+        
+        if wire_to_delete:
+            # 1. Delete visual wire from canvas
+            self.editor_canvas.delete(wire_to_delete['canvas_line_id'])
+
+            # 2. Remove wire reference from connected terminals
+            # Start terminal
+            start_el = next((el for el in self.circuit_elements_on_canvas if el["id"] == wire_to_delete['start_element_id']), None)
+            if start_el:
+                start_term = next((t for t in start_el.get("terminals", []) if t["name"] == wire_to_delete['start_terminal_name']), None)
+                if start_term and wire_to_delete['id'] in start_term.get("connected_wire_ids", []):
+                    start_term["connected_wire_ids"].remove(wire_to_delete['id'])
+            
+            # End terminal
+            end_el = next((el for el in self.circuit_elements_on_canvas if el["id"] == wire_to_delete['end_element_id']), None)
+            if end_el:
+                end_term = next((t for t in end_el.get("terminals", []) if t["name"] == wire_to_delete['end_terminal_name']), None)
+                if end_term and wire_to_delete['id'] in end_term.get("connected_wire_ids", []):
+                    end_term["connected_wire_ids"].remove(wire_to_delete['id'])
+            
+            # 3. Remove wire from the main list
+            self.wires_on_canvas.pop(wire_index)
+            
+            print(f"Fio '{self.currently_selected_wire_id}' deletado.")
+            self.currently_selected_wire_id = None # Clear selection
+        else:
+            print(f"Erro: Fio selecionado com ID '{self.currently_selected_wire_id}' não encontrado na lista para deleção.")
+            self.currently_selected_wire_id = None
 
     def _select_tool(self, tool_type):
         self.selected_component_tool = tool_type
         print(f"Ferramenta selecionada: {self.selected_component_tool}")
         # Optional: Update UI to show selected tool (e.g., change button color, cursor)
-
-    def _add_element_on_canvas(self, event):
+    def _add_element_on_canvas(self, x, y): # x, y are already snapped
         # Deselect any currently selected element when trying to add a new one
         if self.currently_selected_element_id:
             self._deselect_all_elements()
@@ -813,7 +1193,7 @@ class ACCircuitAnalyzerApp:
                 print("Modo Fio selecionado - lógica de desenho de fio a ser implementada.")
             return
 
-        x, y = event.x, event.y
+        # x, y are now passed as arguments, already snapped
         element_id_str = f"{self.selected_component_tool.lower()}_{self.next_element_id}"
         self.next_element_id += 1
 
@@ -825,6 +1205,10 @@ class ACCircuitAnalyzerApp:
         elif self.selected_component_tool == "VS": default_value = "10V" # Example, could be "10V 0deg"
         elif self.selected_component_tool == "IS": default_value = "1A"  # Example, could be "1A 0deg"
         elif self.selected_component_tool == "GND": default_value = "" # GND has no value label
+        elif self.selected_component_tool == "VCVS": default_value = "2.0" # Default gain
+        elif self.selected_component_tool == "VCCS": default_value = "0.1" # Default Gm
+        elif self.selected_component_tool == "CCVS": default_value = "10"  # Default Rm
+
 
         canvas_item_ids = []
         terminals_data = [] # Initialize to empty list
@@ -841,6 +1225,14 @@ class ACCircuitAnalyzerApp:
             canvas_item_ids, terminals_data = self._draw_current_source(x, y, element_id_str)
         elif self.selected_component_tool == "GND":
             canvas_item_ids, terminals_data = self._draw_ground(x, y, element_id_str)
+        elif self.selected_component_tool == "VCVS":
+            canvas_item_ids, terminals_data = self._draw_vcvs(x, y, element_id_str)
+        elif self.selected_component_tool == "VCCS":
+            canvas_item_ids, terminals_data = self._draw_vccs(x, y, element_id_str)
+        elif self.selected_component_tool == "CCVS":
+            canvas_item_ids, terminals_data = self._draw_ccvs(x, y, element_id_str)
+        elif self.selected_component_tool == "CCCS":
+            canvas_item_ids, terminals_data = self._draw_cccs(x, y, element_id_str)
 
         if canvas_item_ids: # If symbol items were drawn
             new_element = {
@@ -850,12 +1242,21 @@ class ACCircuitAnalyzerApp:
                 "y": y,
                 "canvas_item_ids": canvas_item_ids, # Now includes all visual parts including terminals
                 "terminals": terminals_data,       # Stores the list of terminal information
-                "properties": {"value": default_value, "label_id": None} # Default value and label_id
+                "properties": {} # Initialize empty, will be populated below
             }
+            if self.selected_component_tool in ["VCVS", "VCCS"]:
+                new_element["properties"] = {"value": default_value, "ctrl_node_p": "?", "ctrl_node_n": "?", "label_id": None}
+            elif self.selected_component_tool == "CCVS":
+                new_element["properties"] = {"value": default_value, "control_source_name": "VS_ctrl?", "label_id": None}
+            elif self.selected_component_tool == "CCCS":
+                new_element["properties"] = {"value": default_value, "control_source_name": "VS_monitor?", "label_id": None} # Default Beta = 100
+            else:
+                new_element["properties"] = {"value": default_value, "label_id": None}
+
             # Add to list BEFORE drawing the label, as _update_element_label looks it up
             self.circuit_elements_on_canvas.append(new_element) 
 
-            if new_element['type'] != "GND": # Don't draw value label for GND
+            if new_element['type'] not in ["GND"]: # Don't draw value label for GND
                  self._update_element_label(new_element['id']) # Draw the initial value label
             
             print(f"Adicionado: {new_element}")
@@ -870,20 +1271,39 @@ class ACCircuitAnalyzerApp:
             return
 
         current_label_id = element['properties'].get('label_id')
-        label_text = str(element['properties']['value'])
+        
+        text_to_display = ""
+        if element['type'] in ["RESISTOR", "CAPACITOR", "INDUCTOR"]:
+            text_to_display = str(element['properties'].get('value', ''))
+        elif element['type'] in ["VS", "IS"]:
+            mag = element['properties'].get('value', '')
+            # Phase display could be added if 'phase' property exists
+            text_to_display = str(mag)
+        elif element['type'] == "VCVS":
+            text_to_display = f"E: Ganho={element['properties'].get('value', '?')}" # Display gain for VCVS
+        elif element['type'] == "VCCS":
+            text_to_display = f"G: Gm={element['properties'].get('value', '?')}S" # Display Gm for VCCS
+        elif element['type'] == "CCVS":
+            rm_val = element['properties'].get('value', '?')
+            ctrl_src = element['properties'].get('control_source_name', '?')
+            text_to_display = f"H: Rm={rm_val}Ω\nCtrl: {ctrl_src}" # Display Rm and control source for CCVS
+        elif element['type'] == "CCCS":
+            beta_val = element['properties'].get('value', '?')
+            ctrl_src = element['properties'].get('control_source_name', '?')
+            text_to_display = f"F: Beta={beta_val}\nCtrl: {ctrl_src}" # Display Beta and control source for CCCS
 
         # Check if the current_label_id is valid and exists on canvas
-        if current_label_id is not None and self.editor_canvas.find_withtag(current_label_id):
-            self.editor_canvas.itemconfig(current_label_id, text=label_text)
-        else: # Create new label
+        if current_label_id is not None and self.editor_canvas.find_withtag(str(current_label_id)): # Ensure tag is string
+            self.editor_canvas.itemconfig(current_label_id, text=text_to_display)
+        elif text_to_display: # Create new label only if there's text to display
             # Position the label relative to the element's center (x, y)
-            label_x = element['x']
+            label_x = element['x'] # For multi-line, consider if x needs adjustment or use justify
             label_y = element['y'] + 20 # Example: 20px below the center of the symbol
 
             new_label_id = self.editor_canvas.create_text(
                 label_x, label_y,
-                text=label_text,
-                tags=(element_id, "property_label"), # Use the element ID as a tag, plus a generic one
+                text=text_to_display, # Use text_to_display here
+                tags=(element_id, "property_label", str(element_id)+"_prop_label"), # Ensure unique tag for label
                 anchor="n" # Anchor to the north (top center of the text)
             )
             element['properties']['label_id'] = new_label_id
@@ -894,7 +1314,12 @@ class ACCircuitAnalyzerApp:
     def _on_delete_key_press(self, event):
         # The 'event' argument is passed by Tkinter but not used in this method.
         print("Tecla Delete pressionada.") # For debugging
-        self._delete_selected_element()
+        if self.currently_selected_element_id is not None:
+            self._delete_selected_element()
+        elif self.currently_selected_wire_id is not None:
+            self._delete_selected_wire()
+        else:
+            print("Nada selecionado para deletar.")
 
     def _draw_resistor(self, x, y, element_id_tag):
         size_w, size_h = 60, 20; term_len = 5
@@ -1165,6 +1590,198 @@ class ACCircuitAnalyzerApp:
 
         return all_visual_item_ids, terminals_data
 
+    def _draw_vcvs(self, x, y, element_id_tag):
+        size = 20 # Metade da diagonal maior/menor do losango
+        term_len = 10 # Comprimento da perna do terminal
+        # self.terminal_radius is already defined
+        all_visual_ids = []
+        terminals_data = []
+
+        # Corpo do Losango
+        points = [x, y - size, x + size, y, x, y + size, x - size, y]
+        body_id = self.editor_canvas.create_polygon(points, outline=self.default_outline_color, fill="white", width=2, tags=(element_id_tag, "component_symbol", "VCVS"))
+        all_visual_ids.append(body_id)
+
+        # Type Label "E" (for VCVS)
+        type_label_id = self.editor_canvas.create_text(x, y, text="E", font=("Arial", 10, "bold"), tags=(element_id_tag, "label_detail", "VCVS_type_label"))
+        all_visual_ids.append(type_label_id)
+
+        # Terminal de Saída Positivo (OUT+) - Ex: Direita
+        term_out_p_x_offset = size + term_len + self.terminal_radius # Adjusted for terminal radius
+        term_out_p_y_offset = 0
+        term_out_p_abs_x, term_out_p_abs_y = x + term_out_p_x_offset, y + term_out_p_y_offset
+        # Linha da perna
+        leg_out_p_id = self.editor_canvas.create_line(x + size, y, term_out_p_abs_x - self.terminal_radius, term_out_p_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_out_p_id)
+        # Círculo do terminal
+        term_out_p_canvas_id = self.editor_canvas.create_oval(
+            term_out_p_abs_x - self.terminal_radius, term_out_p_abs_y - self.terminal_radius,
+            term_out_p_abs_x + self.terminal_radius, term_out_p_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "OUT+", "connectable"))
+        all_visual_ids.append(term_out_p_canvas_id)
+        terminals_data.append({"name": "OUT+", "x_offset": term_out_p_x_offset, "y_offset": term_out_p_y_offset, "canvas_item_id": term_out_p_canvas_id, "connected_wire_ids": []})
+
+        # Terminal de Saída Negativo (OUT-) - Ex: Esquerda
+        term_out_n_x_offset = -(size + term_len + self.terminal_radius) # Adjusted for terminal radius
+        term_out_n_y_offset = 0
+        term_out_n_abs_x, term_out_n_abs_y = x + term_out_n_x_offset, y + term_out_n_y_offset
+        # Linha da perna
+        leg_out_n_id = self.editor_canvas.create_line(x - size, y, term_out_n_abs_x + self.terminal_radius, term_out_n_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_out_n_id)
+        # Círculo do terminal
+        term_out_n_canvas_id = self.editor_canvas.create_oval(
+            term_out_n_abs_x - self.terminal_radius, term_out_n_abs_y - self.terminal_radius,
+            term_out_n_abs_x + self.terminal_radius, term_out_n_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "OUT-", "connectable"))
+        all_visual_ids.append(term_out_n_canvas_id)
+        terminals_data.append({"name": "OUT-", "x_offset": term_out_n_x_offset, "y_offset": term_out_n_y_offset, "canvas_item_id": term_out_n_canvas_id, "connected_wire_ids": []})
+
+        return all_visual_ids, terminals_data
+
+    def _draw_vccs(self, x, y, element_id_tag):
+        size = 20 # Metade da diagonal
+        term_len = 10
+        # self.terminal_radius is already defined
+        all_visual_ids = []
+        terminals_data = []
+
+        # Corpo do Losango
+        points = [x, y - size, x + size, y, x, y + size, x - size, y]
+        body_id = self.editor_canvas.create_polygon(points, outline=self.default_outline_color, fill="white", width=2, tags=(element_id_tag, "component_symbol", "VCCS"))
+        all_visual_ids.append(body_id)
+
+        # Seta interna (ex: da esquerda para a direita, se corrente sai à direita)
+        arrow_start_x, arrow_start_y = x - size * 0.6, y
+        arrow_end_x, arrow_end_y = x + size * 0.6, y
+        arrow_id = self.editor_canvas.create_line(
+            arrow_start_x, arrow_start_y, arrow_end_x, arrow_end_y,
+            arrow=tk.LAST, width=1.5, fill=self.default_outline_color, tags=(element_id_tag, "internal_symbol", "VCCS_arrow")
+        )
+        all_visual_ids.append(arrow_id)
+
+        # Terminal de Saída (OUT) - Ex: Direita (onde a corrente sai da fonte)
+        term_out_x_offset = size + term_len + self.terminal_radius
+        term_out_y_offset = 0
+        term_out_abs_x, term_out_abs_y = x + term_out_x_offset, y + term_out_y_offset
+        leg_out_id = self.editor_canvas.create_line(x + size, y, term_out_abs_x - self.terminal_radius, term_out_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_out_id)
+        term_out_canvas_id = self.editor_canvas.create_oval(
+            term_out_abs_x - self.terminal_radius, term_out_abs_y - self.terminal_radius,
+            term_out_abs_x + self.terminal_radius, term_out_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "OUT", "connectable"))
+        all_visual_ids.append(term_out_canvas_id)
+        terminals_data.append({"name": "OUT", "x_offset": term_out_x_offset, "y_offset": term_out_y_offset, "canvas_item_id": term_out_canvas_id, "connected_wire_ids": []})
+
+        # Terminal de Entrada (IN) - Ex: Esquerda (onde a corrente entra na fonte vinda do circuito)
+        term_in_x_offset = -(size + term_len + self.terminal_radius)
+        term_in_y_offset = 0
+        term_in_abs_x, term_in_abs_y = x + term_in_x_offset, y + term_in_y_offset
+        leg_in_id = self.editor_canvas.create_line(x - size, y, term_in_abs_x + self.terminal_radius, term_in_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_in_id)
+        term_in_canvas_id = self.editor_canvas.create_oval(
+            term_in_abs_x - self.terminal_radius, term_in_abs_y - self.terminal_radius,
+            term_in_abs_x + self.terminal_radius, term_in_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "IN", "connectable"))
+        all_visual_ids.append(term_in_canvas_id)
+        terminals_data.append({"name": "IN", "x_offset": term_in_x_offset, "y_offset": term_in_y_offset, "canvas_item_id": term_in_canvas_id, "connected_wire_ids": []})
+
+        return all_visual_ids, terminals_data
+
+    def _draw_ccvs(self, x, y, element_id_tag):
+        size = 20 # Metade da diagonal
+        term_len = 10
+        # self.terminal_radius is already defined
+        all_visual_ids = []
+        terminals_data = []
+
+        # Corpo do Losango
+        points = [x, y - size, x + size, y, x, y + size, x - size, y]
+        body_id = self.editor_canvas.create_polygon(points, outline=self.default_outline_color, fill="white", width=2, tags=(element_id_tag, "component_symbol", "CCVS"))
+        all_visual_ids.append(body_id)
+
+        # Type Label "H" (for CCVS)
+        type_label_id = self.editor_canvas.create_text(x, y, text="H", font=("Arial", 10, "bold"), tags=(element_id_tag, "label_detail", "CCVS_type_label"))
+        all_visual_ids.append(type_label_id)
+
+        # Terminal de Saída Positivo (OUT+) - Ex: Direita
+        term_out_p_x_offset = size + term_len + self.terminal_radius
+        term_out_p_y_offset = 0
+        term_out_p_abs_x, term_out_p_abs_y = x + term_out_p_x_offset, y + term_out_p_y_offset
+        leg_out_p_id = self.editor_canvas.create_line(x + size, y, term_out_p_abs_x - self.terminal_radius, term_out_p_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_out_p_id)
+        term_out_p_canvas_id = self.editor_canvas.create_oval(
+            term_out_p_abs_x - self.terminal_radius, term_out_p_abs_y - self.terminal_radius,
+            term_out_p_abs_x + self.terminal_radius, term_out_p_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "OUT+", "connectable"))
+        all_visual_ids.append(term_out_p_canvas_id)
+        terminals_data.append({"name": "OUT+", "x_offset": term_out_p_x_offset, "y_offset": term_out_p_y_offset, "canvas_item_id": term_out_p_canvas_id, "connected_wire_ids": []})
+
+        # Terminal de Saída Negativo (OUT-) - Ex: Esquerda
+        term_out_n_x_offset = -(size + term_len + self.terminal_radius)
+        term_out_n_y_offset = 0
+        term_out_n_abs_x, term_out_n_abs_y = x + term_out_n_x_offset, y + term_out_n_y_offset
+        leg_out_n_id = self.editor_canvas.create_line(x - size, y, term_out_n_abs_x + self.terminal_radius, term_out_n_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_out_n_id)
+        term_out_n_canvas_id = self.editor_canvas.create_oval(
+            term_out_n_abs_x - self.terminal_radius, term_out_n_abs_y - self.terminal_radius,
+            term_out_n_abs_x + self.terminal_radius, term_out_n_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "OUT-", "connectable"))
+        all_visual_ids.append(term_out_n_canvas_id)
+        terminals_data.append({"name": "OUT-", "x_offset": term_out_n_x_offset, "y_offset": term_out_n_y_offset, "canvas_item_id": term_out_n_canvas_id, "connected_wire_ids": []})
+
+        return all_visual_ids, terminals_data
+
+    def _draw_cccs(self, x, y, element_id_tag):
+        size = 20 # Metade da diagonal
+        term_len = 10
+        all_visual_ids = []
+        terminals_data = []
+
+        # Corpo do Losango
+        points = [x, y - size, x + size, y, x, y + size, x - size, y]
+        body_id = self.editor_canvas.create_polygon(points, outline=self.default_outline_color, fill="white", width=2, tags=(element_id_tag, "component_symbol", "CCCS"))
+        all_visual_ids.append(body_id)
+
+        # Seta interna (ex: da esquerda para a direita, se corrente sai à direita)
+        # Assumindo que a corrente controlada flui de "IN" para "OUT" (convencional),
+        # e "OUT" é o terminal de onde a corrente sai do componente.
+        # Se "OUT" está à direita, a seta aponta para a direita.
+        arrow_start_x, arrow_start_y = x - size * 0.6, y
+        arrow_end_x, arrow_end_y = x + size * 0.6, y
+        arrow_id = self.editor_canvas.create_line(
+            arrow_start_x, arrow_start_y, arrow_end_x, arrow_end_y,
+            arrow=tk.LAST, width=1.5, fill=self.default_outline_color, tags=(element_id_tag, "internal_symbol", "CCCS_arrow")
+        )
+        all_visual_ids.append(arrow_id)
+
+        # Terminal de Saída (OUT) - Ex: Direita (onde a corrente sai da fonte)
+        term_out_x_offset = size + term_len + self.terminal_radius
+        term_out_y_offset = 0
+        term_out_abs_x, term_out_abs_y = x + term_out_x_offset, y + term_out_y_offset
+        leg_out_id = self.editor_canvas.create_line(x + size, y, term_out_abs_x - self.terminal_radius, term_out_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_out_id)
+        term_out_canvas_id = self.editor_canvas.create_oval(
+            term_out_abs_x - self.terminal_radius, term_out_abs_y - self.terminal_radius,
+            term_out_abs_x + self.terminal_radius, term_out_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "OUT", "connectable"))
+        all_visual_ids.append(term_out_canvas_id)
+        terminals_data.append({"name": "OUT", "x_offset": term_out_x_offset, "y_offset": term_out_y_offset, "canvas_item_id": term_out_canvas_id, "connected_wire_ids": []})
+
+        # Terminal de Entrada (IN) - Ex: Esquerda (onde a corrente entra na fonte vinda do circuito)
+        term_in_x_offset = -(size + term_len + self.terminal_radius)
+        term_in_y_offset = 0
+        term_in_abs_x, term_in_abs_y = x + term_in_x_offset, y + term_in_y_offset
+        leg_in_id = self.editor_canvas.create_line(x - size, y, term_in_abs_x + self.terminal_radius, term_in_abs_y, fill=self.default_outline_color, tags=(element_id_tag, "component_symbol"))
+        all_visual_ids.append(leg_in_id)
+        term_in_canvas_id = self.editor_canvas.create_oval(
+            term_in_abs_x - self.terminal_radius, term_in_abs_y - self.terminal_radius,
+            term_in_abs_x + self.terminal_radius, term_in_abs_y + self.terminal_radius,
+            fill=self.terminal_fill_color, outline=self.terminal_outline_color, tags=(element_id_tag, "terminal", "IN", "connectable"))
+        all_visual_ids.append(term_in_canvas_id)
+        terminals_data.append({"name": "IN", "x_offset": term_in_x_offset, "y_offset": term_in_y_offset, "canvas_item_id": term_in_canvas_id, "connected_wire_ids": []})
+
+        return all_visual_ids, terminals_data
+
     def _parse_numeric_value(self, value_str):
         value_str = str(value_str).strip().lower()
         original_value_for_error = value_str # Keep original for error return
@@ -1287,6 +1904,14 @@ class ACCircuitAnalyzerApp:
                 terminal_names_ordered = ["P", "N"] # Positive, Negative
             elif element['type'] == "IS":
                 terminal_names_ordered = ["OUT", "IN"] # Current exits OUT, enters IN
+            elif element['type'] == "VCVS":
+                terminal_names_ordered = ["OUT+", "OUT-"] # Output terminals
+            elif element['type'] == "VCCS":
+                terminal_names_ordered = ["OUT", "IN"] # Current exits OUT, enters IN
+            elif element['type'] == "CCVS": 
+                terminal_names_ordered = ["OUT+", "OUT-"] # Output terminals
+            elif element['type'] == "CCCS": 
+                terminal_names_ordered = ["OUT", "IN"] # Output current path for CCCS
             # Add more for controlled sources if they are drawn
 
             for term_name in terminal_names_ordered:
@@ -1310,7 +1935,43 @@ class ACCircuitAnalyzerApp:
             elif element['type'] == "IS":
                 mag, phase = self._parse_source_ac_value(value_str_prop)
                 line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} AC {mag} {phase}" # Node OUT, Node IN
-            # Add controlled sources later if needed
+            elif element['type'] == "VCVS":
+                gain_str = self._parse_numeric_value(element['properties'].get('value', '1')) # Gain
+                ctrl_p_val = element['properties'].get('ctrl_node_p', 'NODO_CTRL_P_DESCONHECIDO')
+                ctrl_n_val = element['properties'].get('ctrl_node_n', 'NODO_CTRL_N_DESCONHECIDO')
+                if gain_str == "VALOR_INVALIDO" or "?" in ctrl_p_val or "?" in ctrl_n_val:
+                    line = f"* ERRO_VCVS: {component_name_for_netlist} ({element['id']}) - Ganho ou nós de controle inválidos/não definidos. Ganho: {gain_str}, Ctrl+: {ctrl_p_val}, Ctrl-: {ctrl_n_val}"
+                else:
+                    line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} {ctrl_p_val} {ctrl_n_val} {gain_str}"
+            elif element['type'] == "VCCS":
+                gm_str = self._parse_numeric_value(element['properties'].get('value', '0.1')) # Gm
+                ctrl_p_val = element['properties'].get('ctrl_node_p', 'NODO_CTRL_P_DESCONHECIDO')
+                ctrl_n_val = element['properties'].get('ctrl_node_n', 'NODO_CTRL_N_DESCONHECIDO')
+                if gm_str == "VALOR_INVALIDO" or "?" in ctrl_p_val or "?" in ctrl_n_val:
+                    line = f"* ERRO_VCCS: {component_name_for_netlist} ({element['id']}) - Gm ou nós de controle inválidos/não definidos. Gm: {gm_str}, Ctrl+: {ctrl_p_val}, Ctrl-: {ctrl_n_val}"
+                else:
+                    line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} {ctrl_p_val} {ctrl_n_val} {gm_str}" # OUT, IN, CTRL+, CTRL-, Gm
+            elif element['type'] == "CCVS":
+                rm_str = self._parse_numeric_value(element['properties'].get('value', '10')) # Rm
+                control_vs_name = element['properties'].get('control_source_name', 'VS_CONTROLE_DESCONHECIDO')
+                if rm_str == "VALOR_INVALIDO" or "?" in control_vs_name or not control_vs_name.upper().startswith("VS"):
+                    line = f"* ERRO_CCVS: {component_name_for_netlist} ({element['id']}) - Rm ou nome da fonte VS de controle inválidos/não definidos. Rm: {rm_str}, CtrlVS: {control_vs_name}"
+                else:
+                    # Netlist format: H<name> <out+> <out-> <VS_control_name> <Rm_value>
+                    line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} {control_vs_name} {rm_str}"
+            elif element['type'] == "CCCS":
+                beta_str = self._parse_numeric_value(element['properties'].get('value', '100')) # Beta
+                control_vs_name_cccs_prop = element['properties'].get('control_source_name', 'VS_CONTROLE_DESCONHECIDO')
+                
+                error_in_cccs = False
+                if " " in control_vs_name_cccs_prop:
+                    netlist_lines.append(f"* AVISO_CCCS: {component_name_for_netlist} ({element['id']}) - Nome da fonte de controle '{control_vs_name_cccs_prop}' contém espaços. Usando '{control_vs_name_cccs_prop.split(' ')[0]}'.")
+                    control_vs_name_cccs_prop = control_vs_name_cccs_prop.split(" ")[0] # Attempt to fix
+                if beta_str == "VALOR_INVALIDO" or "?" in control_vs_name_cccs_prop or not control_vs_name_cccs_prop.upper().startswith("VS"):
+                    line = f"* ERRO_CCCS: {component_name_for_netlist} ({element['id']}) - Beta ou nome da fonte VS de controle inválidos/não definidos. Beta: {beta_str}, CtrlVS: {control_vs_name_cccs_prop}"
+                else:
+                    # Netlist format: F<name> <out> <in> <VS_control_name> <Beta_value>
+                    line = f"{component_name_for_netlist} {node_labels[0]} {node_labels[1]} {control_vs_name_cccs_prop} {beta_str}"
             else:
                 line = f"* TIPO_NAO_SUPORTADO_PARA_NETLIST: {component_name_for_netlist} ({element['type']})"
 
@@ -1478,6 +2139,170 @@ class ACCircuitAnalyzerApp:
                         # If performance becomes an issue with very large connected components,
                         # a set for `in_queue` check alongside collections.deque could be used.
                         queue.append((other_el_id, other_term_name))
+
+    def _prompt_load_diagram(self):
+        """Opens a file dialog to ask the user to select a diagram file to load."""
+        filepath = filedialog.askopenfilename(
+            master=self.master,
+            title="Carregar Diagrama",
+            filetypes=[("Diagrama AC Analyzer JSON", "*.acdiag.json"),
+                       ("Arquivos JSON", "*.json"),
+                       ("Todos os Arquivos", "*.*")]
+        )
+        if not filepath:
+            return  # User cancelled
+
+        self._load_diagram_from_file(filepath)
+
+    def _clear_editor_canvas_and_data(self):
+        """Clears the entire state of the circuit editor canvas and its data structures."""
+        # Delete all visual items from the canvas
+        self.editor_canvas.delete("all")
+
+        # Clear data structures
+        self.circuit_elements_on_canvas = []
+        self.wires_on_canvas = []
+
+        # Reset selection states and ID counters
+        self.currently_selected_element_id = None
+        self.currently_selected_wire_id = None
+        self.next_element_id = 0 # Will be overwritten by loaded file if successful
+        self.next_wire_id = 0  # Will be overwritten by loaded file if successful
+
+        # Reset wire drawing state
+        # self.wire_preview_line_id is already deleted by canvas.delete("all")
+        self.is_drawing_wire = False
+        self.wire_start_info = None
+        self.wire_preview_line_id = None
+
+        print("Editor limpo e dados resetados.")
+
+    def _load_diagram_from_file(self, filepath):
+        """Loads a circuit diagram from a JSON file into the editor."""
+        self._clear_editor_canvas_and_data() # Clear current editor state first
+
+        try:
+            with open(filepath, 'r') as f:
+                diagram_data = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Erro ao Carregar Diagrama", f"Não foi possível carregar ou ler o arquivo do diagrama:\n{e}", parent=self.master)
+            return
+
+        # Restore ID counters
+        self.next_element_id = diagram_data.get("next_element_id", 0)
+        self.next_wire_id = diagram_data.get("next_wire_id", 0)
+
+        # Recreate Elements
+        elements_data_from_file = diagram_data.get("elements", [])
+        for element_data in elements_data_from_file:
+            element_id = element_data['id']
+            element_type = element_data['type']
+            x, y = element_data['x'], element_data['y']
+            properties_data = element_data.get('properties', {}) # label_id is not in here
+            terminals_structure_from_file = element_data.get('terminals', [])
+
+            # Call the appropriate drawing function (these return new canvas IDs)
+            draw_func_name = f"_draw_{element_type.lower()}"
+            if hasattr(self, draw_func_name) and callable(getattr(self, draw_func_name)):
+                draw_func = getattr(self, draw_func_name)
+                all_new_visual_ids, new_terminals_data_with_canvas_ids = draw_func(x, y, element_id)
+            else:
+                messagebox.showwarning("Carregar Diagrama", f"Tipo de elemento desconhecido '{element_type}' encontrado no arquivo. Elemento '{element_id}' será ignorado.", parent=self.master)
+                continue
+
+            loaded_element = {
+                "id": element_id, "type": element_type, "x": x, "y": y,
+                "canvas_item_ids": all_new_visual_ids,
+                "properties": properties_data, # Properties from file (value, etc.)
+                "terminals": new_terminals_data_with_canvas_ids # Terminals with new canvas_item_ids
+            }
+
+            # Restore connected_wire_ids for each terminal
+            for term_new_info in loaded_element["terminals"]:
+                original_term_info = next((t_orig for t_orig in terminals_structure_from_file if t_orig["name"] == term_new_info["name"]), None)
+                if original_term_info:
+                    term_new_info["connected_wire_ids"] = original_term_info.get("connected_wire_ids", [])
+                else: # Should not happen if data is consistent
+                    term_new_info["connected_wire_ids"] = []
+
+            self.circuit_elements_on_canvas.append(loaded_element)
+            if loaded_element['type'] not in ["GND"]: # GND has no value label
+                self._update_element_label(element_id) # This will create a new label_id in properties
+
+        # Recreate Wires
+        wires_data_from_file = diagram_data.get("wires", [])
+        for wire_data in wires_data_from_file:
+            wire_id = wire_data['id']
+            start_el_id, start_term_name = wire_data['start_element_id'], wire_data['start_terminal_name']
+            end_el_id, end_term_name = wire_data['end_element_id'], wire_data['end_terminal_name']
+
+            start_coords = self._get_terminal_absolute_coords(start_el_id, start_term_name)
+            end_coords = self._get_terminal_absolute_coords(end_el_id, end_term_name)
+
+            if start_coords and end_coords:
+                new_line_id = self.editor_canvas.create_line(start_coords[0], start_coords[1], end_coords[0], end_coords[1], fill=self.wire_default_color, width=2, tags=("wire", wire_id))
+                self.wires_on_canvas.append({"id": wire_id, "start_element_id": start_el_id, "start_terminal_name": start_term_name, "end_element_id": end_el_id, "end_terminal_name": end_term_name, "canvas_line_id": new_line_id})
+            else:
+                messagebox.showwarning("Carregar Diagrama", f"Não foi possível recriar o fio '{wire_id}'. Terminais não encontrados.", parent=self.master)
+
+        messagebox.showinfo("Carregar Diagrama", f"Diagrama carregado com sucesso de:\n{filepath}", parent=self.master)
+
+    def _prompt_save_diagram_as(self):
+        """Opens a file dialog to ask the user where to save the current diagram."""
+        filepath = filedialog.asksaveasfilename(
+            master=self.master, # Ensure dialog is parented to main window or a relevant toplevel
+            title="Salvar Diagrama Como",
+            defaultextension=".acdiag.json",
+            filetypes=[("Diagrama AC Analyzer JSON", "*.acdiag.json"),
+                       ("Arquivos JSON", "*.json"),
+                       ("Todos os Arquivos", "*.*")]
+        )
+        if not filepath:
+            return  # User cancelled
+
+        self._save_diagram_to_file(filepath)
+
+    def _save_diagram_to_file(self, filepath):
+        """Saves the current state of the circuit diagram editor to a JSON file."""
+        diagram_data = {
+            "elements": [],
+            "wires": [],
+            "next_element_id": self.next_element_id,
+            "next_wire_id": self.next_wire_id,
+            # Future: "zoom_level": self.editor_canvas_zoom, "pan_offset": (self.pan_x, self.pan_y)
+        }
+
+        # Serialize Elements
+        for element_orig in self.circuit_elements_on_canvas:
+            element_copy = copy.deepcopy(element_orig)  # Use deepcopy to avoid modifying live data
+
+            element_copy.pop('canvas_item_ids', None) # Remove list of visual Tkinter IDs
+
+            if 'terminals' in element_copy and isinstance(element_copy['terminals'], list):
+                for terminal_data in element_copy['terminals']: # terminal_data is a dict
+                    terminal_data.pop('canvas_item_id', None) # Remove individual terminal's visual Tkinter ID
+
+            if 'properties' in element_copy and isinstance(element_copy['properties'], dict):
+                element_copy['properties'].pop('label_id', None) # Remove property label's Tkinter ID
+
+            diagram_data["elements"].append(element_copy)
+
+        # Serialize Wires
+        for wire_orig in self.wires_on_canvas:
+            wire_copy = copy.deepcopy(wire_orig) # Use deepcopy
+            wire_copy.pop('canvas_line_id', None) # Remove wire's visual Tkinter ID
+            diagram_data["wires"].append(wire_copy)
+
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(diagram_data, f, indent=4)
+            messagebox.showinfo("Salvar Diagrama", f"Diagrama salvo com sucesso em:\n{filepath}", parent=self.master)
+        except Exception as e:
+            messagebox.showerror("Erro ao Salvar Diagrama", f"Não foi possível salvar o diagrama:\n{e}", parent=self.master)
+
+
+    # --- Utility methods for UI theming and color ---
+
 
     def _tkinter_gray_to_hex(self, gray_string):
         """Converts Tkinter grayXX string to a hex color string."""
@@ -2909,6 +3734,8 @@ class ACCircuitAnalyzerApp:
                 val_str = f"Beta: {comp_spec['gain']}, CtrlSrc: {comp_spec['control_source_name']}"
             elif comp_type == 'VCCS':
                 val_str = f"Gm: {comp_spec['gain']} S, CtrlNós: {comp_spec.get('control_nodes',['N/A','N/A'])[0]}-{comp_spec.get('control_nodes',['N/A','N/A'])[1]}"
+            # Default value for CCCS if properties are missing (should not happen with proper init)
+            # elif comp_type == 'CCCS': val_str = f"Beta: {comp_spec.get('gain', 'N/A')}, Ctrl: {comp_spec.get('control_source_name', 'N/A')}"
             else: # Should not happen if all types handled
                     val_str = "Def. Erro"
 
