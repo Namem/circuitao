@@ -37,6 +37,21 @@ class ACCircuitAnalyzerApp:
         self.ax_main_plot_twin = None
         self.canvas_main_plot = None
         self.toolbar_main_plot = None
+
+        self.fig_waveforms = None
+        self.ax_waveforms = None
+        self.canvas_waveforms_figure_agg = None # To store the FigureCanvasTkAgg instance
+        self.canvas_waveforms_widget = None # O widget Tk do canvas
+        self.toolbar_waveforms = None
+        # --- Waveform Selection ---
+        self.scrollable_waveform_controls_area = None # Frame to hold selection UI, now scrollable
+        self.waveform_selection_vars = {
+            "nodal_voltages": {},   # Key: node_name (str), Value: tk.BooleanVar
+            "component_currents": {}, # Key: comp_name (str), Value: tk.BooleanVar
+            "component_voltages": {}  # Key: comp_name (str), Value: tk.BooleanVar
+        }
+        self.waveform_selection_scroll_frames = {} # To keep references to scrollable frames
+
         self.circuit_diagram_canvas = None
         self.circuit_diagram_frame = None
 
@@ -276,6 +291,7 @@ class ACCircuitAnalyzerApp:
         tab_circuit = tab_view.add("Circuito")
         tab_phasors = tab_view.add("Fasores")
         tab_editor = tab_view.add("Editor") # Nova aba
+        tab_waveforms = tab_view.add("Formas de Onda")
 
         tab_results.grid_columnconfigure(0, weight=1)
         tab_results.grid_rowconfigure(0, weight=1)
@@ -283,6 +299,10 @@ class ACCircuitAnalyzerApp:
         tab_circuit.grid_rowconfigure(0, weight=1)
         tab_phasors.grid_columnconfigure(0, weight=1)
         tab_phasors.grid_rowconfigure(0, weight=1)
+        tab_waveforms.grid_columnconfigure(0, weight=1) # Frame principal dentro da aba
+        tab_waveforms.grid_rowconfigure(0, weight=0)    # Para controles de seleção (futuro)
+        tab_waveforms.grid_rowconfigure(1, weight=1)    # Para o gráfico
+
         # Configurar grid para a aba Editor
         tab_editor.grid_columnconfigure(0, weight=0) # Coluna da paleta (largura ~150px)
         tab_editor.grid_columnconfigure(1, weight=1) # Coluna do canvas (expansível)
@@ -307,7 +327,7 @@ class ACCircuitAnalyzerApp:
         self.plot_container_frame.grid_rowconfigure(0, weight=1)
         self.plot_container_frame.grid_rowconfigure(1, weight=0)
 
-        self.fig_main_plot = Figure(figsize=(5, 4), dpi=100)
+        self.fig_main_plot = Figure(figsize=(5, 4), dpi=100, constrained_layout=True)
         self.ax_main_plot = self.fig_main_plot.add_subplot(111)
         self.canvas_main_plot = FigureCanvasTkAgg(self.fig_main_plot, master=self.plot_container_frame)
         canvas_widget = self.canvas_main_plot.get_tk_widget()
@@ -316,6 +336,32 @@ class ACCircuitAnalyzerApp:
         self.toolbar_main_plot = NavigationToolbar2Tk(self.canvas_main_plot, self.plot_container_frame, pack_toolbar=False)
         self.toolbar_main_plot.update()
         self.toolbar_main_plot.grid(row=1, column=0, sticky="ew", padx=2, pady=(0,2))
+
+        # --- Estrutura da Aba "Formas de Onda" ---
+        # NOVO: Frame de controles principal agora é rolável
+        self.scrollable_waveform_controls_area = ctk.CTkScrollableFrame(
+            master=tab_waveforms,
+            height=220 # Altura fixa para a área de controles
+        )
+        self.scrollable_waveform_controls_area.grid(row=0, column=0, sticky="new", padx=5, pady=5)
+
+        # Placeholder label, will be replaced by _update_waveform_selection_ui
+        ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Execute uma análise para selecionar formas de onda.").pack(padx=10, pady=5)
+        
+        waveform_plot_frame = ctk.CTkFrame(tab_waveforms, corner_radius=6)
+        waveform_plot_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        # waveform_plot_frame já tem grid configurado pela tab_waveforms
+
+        self.fig_waveforms = Figure(figsize=(5, 4), dpi=100, constrained_layout=True)
+        self.ax_waveforms = self.fig_waveforms.add_subplot(111)
+
+        self.canvas_waveforms_figure_agg = FigureCanvasTkAgg(self.fig_waveforms, master=waveform_plot_frame)
+        self.canvas_waveforms_widget = self.canvas_waveforms_figure_agg.get_tk_widget()
+        self.canvas_waveforms_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        self.toolbar_waveforms = NavigationToolbar2Tk(self.canvas_waveforms_figure_agg, waveform_plot_frame, pack_toolbar=False)
+        self.toolbar_waveforms.update()
+        self.toolbar_waveforms.pack(side=tk.BOTTOM, fill=tk.X, padx=0, pady=0)
 
         # --- Painel da Paleta de Componentes (Esquerda) para a aba Editor ---
         palette_frame = ctk.CTkFrame(tab_editor, width=180, corner_radius=0) # Ajuste a largura conforme necessário
@@ -406,10 +452,12 @@ class ACCircuitAnalyzerApp:
 
         self._clear_main_plot(initial_message="Diagrama Fasorial: Insira netlist e analise.")
         self._clear_static_circuit_diagram(initial_message="Diagrama do Circuito: Aguardando análise via netlist.")
+        self._clear_waveforms_plot(initial_message="Execute uma análise para ver as formas de onda.")
 
         self.master.after(10, self._on_include_component_change)
         self._on_include_component_change()
         self.master.after(50, self._draw_editor_grid) # Initial grid draw after UI is likely settled
+        self._update_waveform_selection_ui() # Initial call to setup placeholder
 
     def _draw_editor_grid(self):
         """Draws the grid on the editor canvas."""
@@ -2301,6 +2349,164 @@ class ACCircuitAnalyzerApp:
             messagebox.showerror("Erro ao Salvar Diagrama", f"Não foi possível salvar o diagrama:\n{e}", parent=self.master)
 
 
+    def _clear_waveforms_plot(self, initial_message=None, error_message=None):
+        if not self.ax_waveforms: return # pragma: no cover
+        
+        # Surgical clear
+        for line in list(self.ax_waveforms.get_lines()): # Iterate over a copy
+            line.remove()
+        if self.ax_waveforms.get_legend():
+            self.ax_waveforms.get_legend().remove()
+        for text_obj in list(self.ax_waveforms.texts): # Iterate over a copy
+            text_obj.remove()
+        
+        bg_color = self._get_ctk_bg_color()
+        text_color = self._get_ctk_text_color()
+        self.ax_waveforms.set_facecolor(bg_color)
+        self.fig_waveforms.patch.set_facecolor(bg_color)
+
+        message_to_display = initial_message or "Aguardando dados..."
+        title = "Formas de Onda no Tempo"
+        if error_message:
+            message_to_display = error_message
+            text_color = 'red'
+
+        self.ax_waveforms.text(0.5, 0.5, message_to_display, ha='center', va='center', fontsize=10, color=text_color, wrap=True)
+        self.ax_waveforms.set_title(title, fontsize=12, color=text_color)
+        self.ax_waveforms.set_xticks([])
+        self.ax_waveforms.set_yticks([])
+        self.ax_waveforms.grid(False)
+        # try:
+        #     self.fig_waveforms.tight_layout() # Not needed with constrained_layout
+        # except Exception: pass # pragma: no cover
+        if self.canvas_waveforms_figure_agg:
+             self.canvas_waveforms_figure_agg.draw_idle()
+
+    def _update_waveform_selection_ui(self):
+        # Limpar widgets antigos do frame de controles
+        for widget in self.scrollable_waveform_controls_area.winfo_children(): # Alterado para self.scrollable_waveform_controls_area
+            widget.destroy()
+        # self.waveform_selection_scroll_frames.clear() # Não é mais necessário
+
+        # Reinicializar vars (ou manter o estado anterior se preferível, mas limpar é mais simples para agora)
+        self.waveform_selection_vars = {"nodal_voltages": {}, "component_currents": {}, "component_voltages": {}}
+
+        if not self.analysis_performed_successfully or not self.analysis_results:
+            ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Execute uma análise para selecionar formas de onda.").pack(pady=10, anchor="w", padx=5)
+            return
+
+        ctk.CTkButton(self.scrollable_waveform_controls_area, text="Plotar Selecionadas", command=self._plot_time_domain_waveforms).pack(pady=(5,10), fill="x", padx=5)
+
+        # --- Seção de Tensões Nodais ---
+        ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Tensões Nodais:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5, pady=(5,0))
+        nodal_voltages = self.analysis_results.get('nodal_voltages_phasors', {})
+        if not nodal_voltages:
+            ctk.CTkLabel(self.scrollable_waveform_controls_area, text="- Nenhuma disponível -").pack(anchor="w", padx=10)
+        else:
+            for node_name in sorted(nodal_voltages.keys(), key=lambda x: int(x) if x.isdigit() and x != '0' else (-1 if x == '0' else float('inf'))):
+                if node_name == '0': continue # Normalmente não plotamos V(0)
+                var = tk.BooleanVar(value=False) # Default to False
+                self.waveform_selection_vars["nodal_voltages"][node_name] = var
+                # Checkbox é filho direto do scrollable_waveform_controls_area
+                cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"V({node_name})", variable=var)
+                cb.pack(anchor="w", padx=10, pady=1) # Ajuste o pady para compactar
+
+        # --- Seção de Correntes em Componentes ---
+        ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Correntes em Componentes:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5, pady=(10,0))
+        comp_currents = self.analysis_results.get('component_currents_phasors', {})
+        if not comp_currents:
+            ctk.CTkLabel(self.scrollable_waveform_controls_area, text="- Nenhuma disponível -").pack(anchor="w", padx=10)
+        else:
+            for comp_name in sorted(comp_currents.keys()):
+                var = tk.BooleanVar(value=False)
+                self.waveform_selection_vars["component_currents"][comp_name] = var
+                cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"I({comp_name})", variable=var)
+                cb.pack(anchor="w", padx=10, pady=1)
+            
+        # --- Seção de Tensões em Componentes (Vdrop) ---
+        ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Tensões em Componentes (Vqueda):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5, pady=(10,0))
+        comp_voltages = self.analysis_results.get('component_voltages_phasors', {})
+        if not comp_voltages:
+            ctk.CTkLabel(self.scrollable_waveform_controls_area, text="- Nenhuma disponível -").pack(anchor="w", padx=10)
+        else:
+            for comp_name in sorted(comp_voltages.keys()):
+                var = tk.BooleanVar(value=False)
+                self.waveform_selection_vars["component_voltages"][comp_name] = var
+                cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"V_queda({comp_name})", variable=var)
+                cb.pack(anchor="w", padx=10, pady=1)
+
+    def _plot_time_domain_waveforms(self):
+        if not self.analysis_performed_successfully or not self.analysis_results or \
+           self.analysis_results.get('freq') is None or self.analysis_results.get('freq') <= 0:
+            self._clear_waveforms_plot(error_message="Análise não realizada ou frequência inválida.")
+            return
+
+        # Surgical clear before plotting new data
+        if not self.ax_waveforms: return # pragma: no cover
+
+        for line in list(self.ax_waveforms.get_lines()): 
+            line.remove()
+        if self.ax_waveforms.get_legend(): 
+            self.ax_waveforms.get_legend().remove()
+        for text_obj in list(self.ax_waveforms.texts): 
+            text_obj.remove()
+
+        self.ax_waveforms.set_title("Formas de Onda no Tempo", fontsize=12, color=self._get_ctk_text_color())
+        self.ax_waveforms.set_xticks([]) # Will be overridden if data is plotted
+        self.ax_waveforms.set_yticks([]) # Will be overridden if data is plotted
+        self.ax_waveforms.grid(False)   # Will be overridden if data is plotted
+
+        freq = self.analysis_results['freq']
+        omega = 2 * math.pi * freq
+        period = 1 / freq
+        t_values = np.linspace(0, 3 * period, 500) # Plotar 3 ciclos
+
+        # Iterar sobre as Tensões Nodais selecionadas
+        for node_name, var in self.waveform_selection_vars["nodal_voltages"].items():
+            if var.get(): # Se o checkbox estiver marcado
+                phasor = self.analysis_results['nodal_voltages_phasors'].get(node_name)
+                if phasor is not None:
+                    mag = abs(phasor)
+                    phase_rad = cmath.phase(phasor)
+                    y_values = mag * np.cos(omega * t_values + phase_rad)
+                    self.ax_waveforms.plot(t_values, y_values, label=f"V({node_name})(t)")
+
+        # Iterar sobre as Correntes em Componentes selecionadas
+        for comp_name, var in self.waveform_selection_vars["component_currents"].items():
+            if var.get():
+                phasor = self.analysis_results['component_currents_phasors'].get(comp_name)
+                if phasor is not None:
+                    mag = abs(phasor)
+                    phase_rad = cmath.phase(phasor)
+                    y_values = mag * np.cos(omega * t_values + phase_rad)
+                    self.ax_waveforms.plot(t_values, y_values, label=f"I({comp_name})(t)")
+
+        # Iterar sobre as Tensões em Componentes selecionadas
+        for comp_name, var in self.waveform_selection_vars["component_voltages"].items():
+            if var.get():
+                phasor = self.analysis_results['component_voltages_phasors'].get(comp_name)
+                if phasor is not None:
+                    mag = abs(phasor)
+                    phase_rad = cmath.phase(phasor)
+                    y_values = mag * np.cos(omega * t_values + phase_rad)
+                    self.ax_waveforms.plot(t_values, y_values, label=f"V_queda({comp_name})(t)")
+
+        if not self.ax_waveforms.lines: # Se nada foi plotado
+             self._clear_waveforms_plot(initial_message="Nenhuma forma de onda selecionada para plotar.")
+             return
+
+        # Configurações finais do gráfico
+        self.ax_waveforms.set_xlabel("Tempo (s)")
+        self.ax_waveforms.set_ylabel("Amplitude (V ou A)")
+        self.ax_waveforms.grid(True, linestyle=':', alpha=0.7)
+        self.ax_waveforms.legend(loc='best', fontsize='small')
+        self.ax_waveforms.set_xlim(0, 3 * period) # Ensure xlim is set before drawing
+        # try:
+        #     self.fig_waveforms.tight_layout() # Not needed with constrained_layout
+        # except Exception: pass # pragma: no cover
+        if self.canvas_waveforms_figure_agg:
+            self.canvas_waveforms_figure_agg.draw_idle()
+
     # --- Utility methods for UI theming and color ---
 
 
@@ -3676,6 +3882,8 @@ class ACCircuitAnalyzerApp:
 
             self._update_static_circuit_diagram_from_netlist(parsed_components, frequency, self.analysis_results)
             self._update_phasor_diagram_from_nodal(self.analysis_results, parsed_components)
+            self._plot_time_domain_waveforms() # Plot waveforms
+            self._update_waveform_selection_ui() # Update selection UI after analysis
 
         except Exception as e:
             self.results_text.delete("1.0","end"); error_msg=f"Erro inesperado na análise: {str(e)}";
@@ -3683,6 +3891,8 @@ class ACCircuitAnalyzerApp:
             self._clear_main_plot(error_message="Erro na análise.")
             self._clear_static_circuit_diagram(error_message="Erro na análise.")
             import traceback; traceback.print_exc()
+            self._clear_waveforms_plot(error_message="Erro durante a análise.")
+            self._update_waveform_selection_ui() # Update UI even on error (shows "Execute análise...")
             self.analysis_performed_successfully = False
         finally:
             self.progress_bar.stop();self.progress_bar.pack_forget();self.progress_bar_frame.pack_forget();
@@ -3853,8 +4063,14 @@ class ACCircuitAnalyzerApp:
     def _clear_main_plot(self, initial_message=None, error_message=None):
         # (Original _clear_main_plot method - kept as is)
         if self.ax_main_plot:
-            self.ax_main_plot.set_visible(True) # Ensure main axis is visible
-            self.ax_main_plot.clear()
+            self.ax_main_plot.set_visible(True) 
+            # Surgical clear
+            for artist in list(self.ax_main_plot.lines + self.ax_main_plot.patches + self.ax_main_plot.texts):
+                artist.remove()
+            if self.ax_main_plot.get_legend():
+                self.ax_main_plot.get_legend().remove()
+            # self.ax_main_plot.clear() # Replaced by surgical clear
+
 
             if self.ax_main_plot_twin and self.ax_main_plot_twin.figure:
                 try:
@@ -3885,10 +4101,10 @@ class ACCircuitAnalyzerApp:
             self.ax_main_plot.set_yticks([])
             self.ax_main_plot.grid(False)
 
-            try:
-                self.fig_main_plot.tight_layout()
-            except Exception as e:
-                print(f"[DEBUG] _clear_main_plot tight_layout error: {e}")
+            # try:
+            #     self.fig_main_plot.tight_layout() # Not needed with constrained_layout
+            # except Exception as e:
+            #     print(f"[DEBUG] _clear_main_plot tight_layout error: {e}")
             
             if self.canvas_main_plot: # Redraw only if canvas exists
                  self.canvas_main_plot.draw_idle() # Use draw_idle for efficiency
@@ -3988,7 +4204,14 @@ class ACCircuitAnalyzerApp:
             return
 
         print("\n[DEBUG] Entrando em _update_phasor_diagram_from_nodal")
-        self.ax_main_plot.clear()
+        # Surgical clear before plotting new data
+        for artist in list(self.ax_main_plot.lines + self.ax_main_plot.patches + self.ax_main_plot.texts):
+            artist.remove()
+        if self.ax_main_plot.get_legend():
+            self.ax_main_plot.get_legend().remove()
+        # self.ax_main_plot.clear() # Replaced
+
+
         self.ax_main_plot.set_facecolor('white')
         self.fig_main_plot.patch.set_facecolor('white')
 
@@ -4069,8 +4292,9 @@ class ACCircuitAnalyzerApp:
 
         if plotted_arrows and plotted_labels:
             self.ax_main_plot.legend(plotted_arrows, plotted_labels, loc='best', fontsize='x-small')
-        try: self.fig_main_plot.tight_layout()
-        except Exception as e: print(f"[DEBUG] _update_phasor_diagram_from_nodal tight_layout error: {e}")
+        # try:
+        #     self.fig_main_plot.tight_layout() # Not needed with constrained_layout
+        # except Exception as e: print(f"[DEBUG] _update_phasor_diagram_from_nodal tight_layout error: {e}")
         self.canvas_main_plot.draw_idle()
         print("[DEBUG] Diagrama fasorial nodal desenhado.")
 
