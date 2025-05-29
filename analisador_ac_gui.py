@@ -8,6 +8,10 @@ import json
 import re
 import copy # Added for deepcopying diagram data
 
+import warnings
+# To ignore the specific constrained_layout warning that occurs when drawing empty plots
+warnings.filterwarnings("ignore", category=UserWarning, message="constrained_layout not applied because axes sizes collapsed to zero.*")
+
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
@@ -41,6 +45,7 @@ class ACCircuitAnalyzerApp:
         self.fig_waveforms = None
         self.ax_waveforms = None
         self.canvas_waveforms_figure_agg = None # To store the FigureCanvasTkAgg instance
+        self.ax_waveforms_current_twin = None # For secondary Y-axis for currents
         self.canvas_waveforms_widget = None # O widget Tk do canvas
         self.toolbar_waveforms = None
         # --- Waveform Selection ---
@@ -51,6 +56,14 @@ class ACCircuitAnalyzerApp:
             "component_voltages": {}  # Key: comp_name (str), Value: tk.BooleanVar
         }
         self.waveform_selection_scroll_frames = {} # To keep references to scrollable frames
+        self.num_periods_to_plot_var = tk.StringVar(value="3") # Padrão de 3 períodos
+        self.show_waveform_grid_var = tk.BooleanVar(value=True) # Grade visível por padrão
+
+        # --- Waveform Plotting Aesthetics ---
+        self.waveform_plot_colors = ['tab:blue', 'tab:red', 'tab:green', 'tab:orange',
+                                     'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray',
+                                     'tab:olive', 'tab:cyan']
+        self.waveform_plot_linestyles = ['-', '--', '-.', ':']
 
         self.circuit_diagram_canvas = None
         self.circuit_diagram_frame = None
@@ -2355,6 +2368,12 @@ class ACCircuitAnalyzerApp:
         # Surgical clear
         for line in list(self.ax_waveforms.get_lines()): # Iterate over a copy
             line.remove()
+        # Clear and remove twin axis if it exists
+        if hasattr(self, 'ax_waveforms_current_twin') and self.ax_waveforms_current_twin:
+            if self.ax_waveforms_current_twin.figure: # Check if it's part of a figure
+                self.fig_waveforms.delaxes(self.ax_waveforms_current_twin)
+            self.ax_waveforms_current_twin = None
+
         if self.ax_waveforms.get_legend():
             self.ax_waveforms.get_legend().remove()
         for text_obj in list(self.ax_waveforms.texts): # Iterate over a copy
@@ -2395,17 +2414,51 @@ class ACCircuitAnalyzerApp:
             ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Execute uma análise para selecionar formas de onda.").pack(pady=10, anchor="w", padx=5)
             return
 
+        # --- Controle de Número de Períodos ---
+        periods_frame = ctk.CTkFrame(self.scrollable_waveform_controls_area, fg_color="transparent")
+        periods_frame.pack(fill="x", padx=5, pady=(5,10)) # Added more pady bottom
+        ctk.CTkLabel(periods_frame, text="Nº de Períodos:").pack(side="left", padx=(0,5))
+        periods_entry = ctk.CTkEntry(periods_frame, textvariable=self.num_periods_to_plot_var, width=50)
+        periods_entry.pack(side="left")
+        
+        # --- Controle de Visibilidade da Grade ---
+        grid_toggle_cb = ctk.CTkCheckBox(
+            self.scrollable_waveform_controls_area, # Adicionado ao frame rolável
+            text="Mostrar Grade no Gráfico",
+            variable=self.show_waveform_grid_var,
+            command=self._plot_time_domain_waveforms # Re-plotar para aplicar a mudança
+        )
+        grid_toggle_cb.pack(anchor="w", padx=10, pady=5) # pady=5 para espaçamento
+
+        # --- Botão Principal para Plotar ---
         ctk.CTkButton(self.scrollable_waveform_controls_area, text="Plotar Selecionadas", command=self._plot_time_domain_waveforms).pack(pady=(5,10), fill="x", padx=5)
 
         # --- Seção de Tensões Nodais ---
         ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Tensões Nodais:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5, pady=(5,0))
+        
+        nv_buttons_frame = ctk.CTkFrame(self.scrollable_waveform_controls_area, fg_color="transparent")
+        nv_buttons_frame.pack(fill="x", padx=10, pady=(0,2))
+
+        def select_all_nodal_voltages():
+            for var in self.waveform_selection_vars["nodal_voltages"].values():
+                var.set(True)
+
+        def clear_all_nodal_voltages():
+            for var in self.waveform_selection_vars["nodal_voltages"].values():
+                var.set(False)
+
+        ctk.CTkButton(nv_buttons_frame, text="Todos", width=70, command=select_all_nodal_voltages).pack(side="left", padx=(0,5))
+        ctk.CTkButton(nv_buttons_frame, text="Nenhum", width=70, command=clear_all_nodal_voltages).pack(side="left")
+
         nodal_voltages = self.analysis_results.get('nodal_voltages_phasors', {})
         if not nodal_voltages:
             ctk.CTkLabel(self.scrollable_waveform_controls_area, text="- Nenhuma disponível -").pack(anchor="w", padx=10)
         else:
             for node_name in sorted(nodal_voltages.keys(), key=lambda x: int(x) if x.isdigit() and x != '0' else (-1 if x == '0' else float('inf'))):
                 if node_name == '0': continue # Normalmente não plotamos V(0)
-                var = tk.BooleanVar(value=False) # Default to False
+                # Preserve existing selection if var already exists, otherwise default to False
+                existing_var = self.waveform_selection_vars["nodal_voltages"].get(node_name)
+                var = existing_var if existing_var is not None else tk.BooleanVar(value=False)
                 self.waveform_selection_vars["nodal_voltages"][node_name] = var
                 # Checkbox é filho direto do scrollable_waveform_controls_area
                 cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"V({node_name})", variable=var)
@@ -2413,33 +2466,74 @@ class ACCircuitAnalyzerApp:
 
         # --- Seção de Correntes em Componentes ---
         ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Correntes em Componentes:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5, pady=(10,0))
+        
+        cc_buttons_frame = ctk.CTkFrame(self.scrollable_waveform_controls_area, fg_color="transparent")
+        cc_buttons_frame.pack(fill="x", padx=10, pady=(0,2))
+
+        def select_all_component_currents():
+            for var in self.waveform_selection_vars["component_currents"].values():
+                var.set(True)
+
+        def clear_all_component_currents():
+            for var in self.waveform_selection_vars["component_currents"].values():
+                var.set(False)
+
+        ctk.CTkButton(cc_buttons_frame, text="Todos", width=70, command=select_all_component_currents).pack(side="left", padx=(0,5))
+        ctk.CTkButton(cc_buttons_frame, text="Nenhum", width=70, command=clear_all_component_currents).pack(side="left")
+
         comp_currents = self.analysis_results.get('component_currents_phasors', {})
         if not comp_currents:
             ctk.CTkLabel(self.scrollable_waveform_controls_area, text="- Nenhuma disponível -").pack(anchor="w", padx=10)
         else:
             for comp_name in sorted(comp_currents.keys()):
-                var = tk.BooleanVar(value=False)
+                existing_var = self.waveform_selection_vars["component_currents"].get(comp_name)
+                var = existing_var if existing_var is not None else tk.BooleanVar(value=False)
                 self.waveform_selection_vars["component_currents"][comp_name] = var
                 cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"I({comp_name})", variable=var)
                 cb.pack(anchor="w", padx=10, pady=1)
             
         # --- Seção de Tensões em Componentes (Vdrop) ---
         ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Tensões em Componentes (Vqueda):", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5, pady=(10,0))
+
+        cv_buttons_frame = ctk.CTkFrame(self.scrollable_waveform_controls_area, fg_color="transparent")
+        cv_buttons_frame.pack(fill="x", padx=10, pady=(0,2))
+
+        def select_all_component_voltages():
+            for var in self.waveform_selection_vars["component_voltages"].values():
+                var.set(True)
+
+        def clear_all_component_voltages():
+            for var in self.waveform_selection_vars["component_voltages"].values():
+                var.set(False)
+
+        ctk.CTkButton(cv_buttons_frame, text="Todos", width=70, command=select_all_component_voltages).pack(side="left", padx=(0,5))
+        ctk.CTkButton(cv_buttons_frame, text="Nenhum", width=70, command=clear_all_component_voltages).pack(side="left")
+
         comp_voltages = self.analysis_results.get('component_voltages_phasors', {})
         if not comp_voltages:
             ctk.CTkLabel(self.scrollable_waveform_controls_area, text="- Nenhuma disponível -").pack(anchor="w", padx=10)
         else:
             for comp_name in sorted(comp_voltages.keys()):
-                var = tk.BooleanVar(value=False)
+                existing_var = self.waveform_selection_vars["component_voltages"].get(comp_name)
+                var = existing_var if existing_var is not None else tk.BooleanVar(value=False)
                 self.waveform_selection_vars["component_voltages"][comp_name] = var
                 cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"V_queda({comp_name})", variable=var)
                 cb.pack(anchor="w", padx=10, pady=1)
 
     def _plot_time_domain_waveforms(self):
+        try:
+            num_periods = int(self.num_periods_to_plot_var.get())
+            if num_periods <= 0:
+                num_periods = 3 # Fallback para valor positivo
+        except ValueError:
+            num_periods = 3 # Fallback se a entrada não for um inteiro válido
+            self.num_periods_to_plot_var.set("3") # Reset invalid entry
+
         if not self.analysis_performed_successfully or not self.analysis_results or \
            self.analysis_results.get('freq') is None or self.analysis_results.get('freq') <= 0:
             self._clear_waveforms_plot(error_message="Análise não realizada ou frequência inválida.")
             return
+
 
         # Surgical clear before plotting new data
         if not self.ax_waveforms: return # pragma: no cover
@@ -2448,18 +2542,26 @@ class ACCircuitAnalyzerApp:
             line.remove()
         if self.ax_waveforms.get_legend(): 
             self.ax_waveforms.get_legend().remove()
-        for text_obj in list(self.ax_waveforms.texts): 
-            text_obj.remove()
+        # Clear only non-title texts if needed, or clear all and reset title
+        # For simplicity, let's clear all texts and re-set the title.
+        for text_obj in list(self.ax_waveforms.texts): text_obj.remove()
 
-        self.ax_waveforms.set_title("Formas de Onda no Tempo", fontsize=12, color=self._get_ctk_text_color())
+        self.ax_waveforms.set_title("Formas de Onda no Tempo", fontsize=12, color=self._get_ctk_text_color()) # Reset title
         self.ax_waveforms.set_xticks([]) # Will be overridden if data is plotted
         self.ax_waveforms.set_yticks([]) # Will be overridden if data is plotted
         self.ax_waveforms.grid(False)   # Will be overridden if data is plotted
 
         freq = self.analysis_results['freq']
+        if freq is None or freq <= 0: # Should have been caught earlier, but as a safeguard
+            self._clear_waveforms_plot(error_message="Frequência inválida para plotar formas de onda.")
+            return
         omega = 2 * math.pi * freq
+        # Em _plot_time_domain_waveforms, antes dos loops de plotagem
+        voltage_plot_idx_counter = 0
+        current_plot_idx_counter = 0
+
         period = 1 / freq
-        t_values = np.linspace(0, 3 * period, 500) # Plotar 3 ciclos
+        t_values = np.linspace(0, num_periods * period, 500) # Usar num_periods
 
         # Iterar sobre as Tensões Nodais selecionadas
         for node_name, var in self.waveform_selection_vars["nodal_voltages"].items():
@@ -2468,8 +2570,16 @@ class ACCircuitAnalyzerApp:
                 if phasor is not None:
                     mag = abs(phasor)
                     phase_rad = cmath.phase(phasor)
+                    if not (math.isfinite(mag) and math.isfinite(phase_rad)):
+                        print(f"[DEBUG] Pulando forma de onda para V({node_name}) devido a valores não finitos: mag={mag}, phase={phase_rad}")
+                        continue # Pula esta forma de onda
+
+                    color = self.waveform_plot_colors[voltage_plot_idx_counter % len(self.waveform_plot_colors)]
+                    linestyle_idx = (voltage_plot_idx_counter // len(self.waveform_plot_colors)) % len(self.waveform_plot_linestyles)
+                    linestyle = self.waveform_plot_linestyles[linestyle_idx]
                     y_values = mag * np.cos(omega * t_values + phase_rad)
-                    self.ax_waveforms.plot(t_values, y_values, label=f"V({node_name})(t)")
+                    self.ax_waveforms.plot(t_values, y_values, label=f"V({node_name})(t)", color=color, linestyle=linestyle)
+                    voltage_plot_idx_counter += 1
 
         # Iterar sobre as Correntes em Componentes selecionadas
         for comp_name, var in self.waveform_selection_vars["component_currents"].items():
@@ -2478,8 +2588,18 @@ class ACCircuitAnalyzerApp:
                 if phasor is not None:
                     mag = abs(phasor)
                     phase_rad = cmath.phase(phasor)
+                    if not (math.isfinite(mag) and math.isfinite(phase_rad)):
+                        print(f"[DEBUG] Pulando forma de onda para I({comp_name}) devido a valores não finitos: mag={mag}, phase={phase_rad}")
+                        continue
+
+                    effective_current_plot_index = voltage_plot_idx_counter + current_plot_idx_counter # Simplesmente continua o ciclo geral
+                    color = self.waveform_plot_colors[effective_current_plot_index % len(self.waveform_plot_colors)]
+                    linestyle_idx = (effective_current_plot_index // len(self.waveform_plot_colors)) % len(self.waveform_plot_linestyles)
+                    linestyle = self.waveform_plot_linestyles[linestyle_idx]
                     y_values = mag * np.cos(omega * t_values + phase_rad)
-                    self.ax_waveforms.plot(t_values, y_values, label=f"I({comp_name})(t)")
+                    target_axis_for_currents = self.ax_waveforms # Default to main axis
+                    target_axis_for_currents.plot(t_values, y_values, label=f"I({comp_name})(t)", color=color, linestyle=linestyle)
+                    current_plot_idx_counter += 1
 
         # Iterar sobre as Tensões em Componentes selecionadas
         for comp_name, var in self.waveform_selection_vars["component_voltages"].items():
@@ -2488,19 +2608,34 @@ class ACCircuitAnalyzerApp:
                 if phasor is not None:
                     mag = abs(phasor)
                     phase_rad = cmath.phase(phasor)
+                    if not (math.isfinite(mag) and math.isfinite(phase_rad)):
+                        print(f"[DEBUG] Pulando forma de onda para V_queda({comp_name}) devido a valores não finitos: mag={mag}, phase={phase_rad}")
+                        continue
+                    # Component voltages continue the voltage color/style cycle
+                    color = self.waveform_plot_colors[voltage_plot_idx_counter % len(self.waveform_plot_colors)]
+                    linestyle_idx = (voltage_plot_idx_counter // len(self.waveform_plot_colors)) % len(self.waveform_plot_linestyles)
+                    linestyle = self.waveform_plot_linestyles[linestyle_idx]
                     y_values = mag * np.cos(omega * t_values + phase_rad)
-                    self.ax_waveforms.plot(t_values, y_values, label=f"V_queda({comp_name})(t)")
+                    self.ax_waveforms.plot(t_values, y_values, label=f"V_queda({comp_name})(t)", color=color, linestyle=linestyle)
+                    voltage_plot_idx_counter += 1
 
         if not self.ax_waveforms.lines: # Se nada foi plotado
              self._clear_waveforms_plot(initial_message="Nenhuma forma de onda selecionada para plotar.")
              return
-
+        
         # Configurações finais do gráfico
         self.ax_waveforms.set_xlabel("Tempo (s)")
         self.ax_waveforms.set_ylabel("Amplitude (V ou A)")
-        self.ax_waveforms.grid(True, linestyle=':', alpha=0.7)
+        
+        show_grid = self.show_waveform_grid_var.get()
+        self.ax_waveforms.grid(show_grid, linestyle=':', alpha=0.7)
+        if hasattr(self, 'ax_waveforms_current_twin') and self.ax_waveforms_current_twin and self.ax_waveforms_current_twin.get_visible():
+            # A grade do eixo X principal geralmente é compartilhada.
+            # Para consistência visual, aplicamos também ao eixo Y secundário se ele estiver visível.
+            self.ax_waveforms_current_twin.grid(show_grid, linestyle=':', alpha=0.7)
+            
         self.ax_waveforms.legend(loc='best', fontsize='small')
-        self.ax_waveforms.set_xlim(0, 3 * period) # Ensure xlim is set before drawing
+        self.ax_waveforms.set_xlim(0, num_periods * period) # Usar num_periods
         # try:
         #     self.fig_waveforms.tight_layout() # Not needed with constrained_layout
         # except Exception: pass # pragma: no cover
@@ -4254,6 +4389,11 @@ class ACCircuitAnalyzerApp:
         for i, (label, phasor) in enumerate(phasors_to_plot.items()):
             if phasor is not None and abs(phasor) > 1e-9: # Only plot significant phasors
                 x, y = phasor.real, phasor.imag; mag_ph = abs(phasor)
+
+                if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(mag_ph)):
+                    print(f"[DEBUG] Pulando fasor {label} devido a valores não finitos: x={x}, y={y}, mag={mag_ph}")
+                    continue
+
                 hw = max(0.01, 0.04 * mag_ph); hl = max(0.02, 0.08 * mag_ph)
 
                 color = base_colors[i % len(base_colors)]
