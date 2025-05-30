@@ -53,7 +53,10 @@ class ACCircuitAnalyzerApp:
         self.waveform_selection_vars = {
             "nodal_voltages": {},   # Key: node_name (str), Value: tk.BooleanVar
             "component_currents": {}, # Key: comp_name (str), Value: tk.BooleanVar
-            "component_voltages": {}  # Key: comp_name (str), Value: tk.BooleanVar
+            "component_voltages": {},  # Key: comp_name (str), Value: tk.BooleanVar
+            "three_phase_source_phase_voltages": {}, # Key: (parent_name, phase_char 'A'/'B'/'C'), Value: tk.BooleanVar
+            "three_phase_source_line_currents": {},  # Key: (parent_name, phase_char 'A'/'B'/'C'), Value: tk.BooleanVar
+            "three_phase_source_line_voltages": {}   # Key: (parent_name, pair_char 'AB'/'BC'/'CA'), Value: tk.BooleanVar
         }
         self.waveform_selection_scroll_frames = {} # To keep references to scrollable frames
         self.num_periods_to_plot_var = tk.StringVar(value="3") # Padrão de 3 períodos
@@ -81,6 +84,7 @@ class ACCircuitAnalyzerApp:
 
         self.analysis_results = {}
         self.analysis_performed_successfully = False
+        self.parsed_components_for_plotting = [] # Store parsed components for plotter
 
         # --- Current analysis values for PF correction ---
         self.current_p_real = None
@@ -130,6 +134,9 @@ class ACCircuitAnalyzerApp:
         self.pan_start_x = 0
         self.pan_start_y = 0
         # self.grid_line_ids = [] # Using tags is generally better for managing grid lines
+        
+        # --- Three-Phase Source Details ---
+        self.three_phase_source_details_map = {} # Stores original node names for VSY/VSD
 
         main_app_frame = ctk.CTkFrame(master_window, fg_color="transparent")
         main_app_frame.pack(expand=True, fill="both", padx=5, pady=5)
@@ -2407,8 +2414,14 @@ class ACCircuitAnalyzerApp:
             widget.destroy()
         # self.waveform_selection_scroll_frames.clear() # Não é mais necessário
 
-        # Reinicializar vars (ou manter o estado anterior se preferível, mas limpar é mais simples para agora)
-        self.waveform_selection_vars = {"nodal_voltages": {}, "component_currents": {}, "component_voltages": {}}
+        # Preserve existing selections by not fully re-initializing self.waveform_selection_vars
+        # Only initialize the sub-dictionaries if they don't exist
+        if "nodal_voltages" not in self.waveform_selection_vars: self.waveform_selection_vars["nodal_voltages"] = {}
+        if "component_currents" not in self.waveform_selection_vars: self.waveform_selection_vars["component_currents"] = {}
+        if "component_voltages" not in self.waveform_selection_vars: self.waveform_selection_vars["component_voltages"] = {}
+        if "three_phase_source_phase_voltages" not in self.waveform_selection_vars: self.waveform_selection_vars["three_phase_source_phase_voltages"] = {}
+        if "three_phase_source_line_currents" not in self.waveform_selection_vars: self.waveform_selection_vars["three_phase_source_line_currents"] = {}
+        if "three_phase_source_line_voltages" not in self.waveform_selection_vars: self.waveform_selection_vars["three_phase_source_line_voltages"] = {}
 
         if not self.analysis_performed_successfully or not self.analysis_results:
             ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Execute uma análise para selecionar formas de onda.").pack(pady=10, anchor="w", padx=5)
@@ -2520,6 +2533,57 @@ class ACCircuitAnalyzerApp:
                 cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"V_queda({comp_name})", variable=var)
                 cb.pack(anchor="w", padx=10, pady=1)
 
+        # --- Seção de Grandezas Trifásicas de Fontes ---
+        if hasattr(self, 'three_phase_source_details_map') and self.three_phase_source_details_map:
+            ctk.CTkLabel(self.scrollable_waveform_controls_area, text="Grandezas Trifásicas de Fontes:", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=5, pady=(15,0))
+
+            for parent_name, details in self.three_phase_source_details_map.items():
+                # Ensure this parent_name corresponds to a source that was actually part of the analysis
+                # (e.g. it has decomposed components in analysis_results)
+                # A simple check: if any decomposed component exists.
+                is_source_in_analysis = any(
+                    comp_spec.get('three_phase_parent') == parent_name
+                    for comp_spec in getattr(self, 'parsed_components_for_plotting', [])
+                )
+                if not is_source_in_analysis:
+                    continue
+
+                ctk.CTkLabel(self.scrollable_waveform_controls_area, text=f"Fonte: {parent_name} ({details['type']})", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=10, pady=(5,2))
+                
+                # Tensões de Fase (ex: VAN, VBN, VCN para VSY)
+                if details['type'] == 'VSY':
+                    ctk.CTkLabel(self.scrollable_waveform_controls_area, text="  Tensões de Fase (Vφ):").pack(anchor="w", padx=15, pady=(0,0))
+                    for phase_char in ['A', 'B', 'C']:
+                        key = (parent_name, phase_char) # Using phase_char as part of key for V_phase
+                        var = self.waveform_selection_vars["three_phase_source_phase_voltages"].get(key, tk.BooleanVar(value=False))
+                        self.waveform_selection_vars["three_phase_source_phase_voltages"][key] = var
+                        cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"V_{phase_char}N ({parent_name})", variable=var)
+                        cb.pack(anchor="w", padx=20, pady=1)
+                
+                # Correntes de Linha (IA, IB, IC)
+                ctk.CTkLabel(self.scrollable_waveform_controls_area, text="  Correntes de Linha (IL):").pack(anchor="w", padx=15, pady=(2,0))
+                for phase_char in ['A', 'B', 'C']:
+                    key = (parent_name, phase_char) # Using phase_char as part of key for I_line
+                    var = self.waveform_selection_vars["three_phase_source_line_currents"].get(key, tk.BooleanVar(value=False))
+                    self.waveform_selection_vars["three_phase_source_line_currents"][key] = var
+                    cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"I_{phase_char} ({parent_name})", variable=var)
+                    cb.pack(anchor="w", padx=20, pady=1)
+
+                # Tensões de Linha (VAB, VBC, VCA)
+                ctk.CTkLabel(self.scrollable_waveform_controls_area, text="  Tensões de Linha (VL-L):").pack(anchor="w", padx=15, pady=(2,0))
+                line_voltage_pairs = [("A", "B"), ("B", "C"), ("C", "A")]
+                for p1_char, p2_char in line_voltage_pairs:
+                    pair_str = f"{p1_char}{p2_char}"
+                    key = (parent_name, pair_str) # Using pair_str as part of key for V_line
+                    var = self.waveform_selection_vars["three_phase_source_line_voltages"].get(key, tk.BooleanVar(value=False))
+                    self.waveform_selection_vars["three_phase_source_line_voltages"][key] = var
+                    cb = ctk.CTkCheckBox(self.scrollable_waveform_controls_area, text=f"V_{pair_str} ({parent_name})", variable=var)
+                    cb.pack(anchor="w", padx=20, pady=1)
+
+        # Add a little space at the bottom of the scrollable area
+        ctk.CTkLabel(self.scrollable_waveform_controls_area, text="").pack()
+
+
     def _plot_time_domain_waveforms(self):
         try:
             num_periods = int(self.num_periods_to_plot_var.get())
@@ -2619,6 +2683,94 @@ class ACCircuitAnalyzerApp:
                     self.ax_waveforms.plot(t_values, y_values, label=f"V_queda({comp_name})(t)", color=color, linestyle=linestyle)
                     voltage_plot_idx_counter += 1
 
+        # --- Plotar Grandezas Trifásicas Selecionadas ---
+
+        # Plotar Tensões de Fase de Fontes Trifásicas (VSY)
+        for key, var in self.waveform_selection_vars.get("three_phase_source_phase_voltages", {}).items():
+            if var.get():
+                parent_name, phase_char = key
+                phasor_to_plot = None
+                label_text = f"V_{phase_char}N({parent_name})(t)"
+                
+                source_details = self.three_phase_source_details_map.get(parent_name)
+                if not source_details or source_details['type'] != 'VSY':
+                    continue
+
+                decomposed_comp_name = f"{parent_name}_{phase_char}"
+                phasor_to_plot = self.analysis_results['component_voltages_phasors'].get(decomposed_comp_name)
+                
+                if phasor_to_plot is not None:
+                    mag, phase_rad = abs(phasor_to_plot), cmath.phase(phasor_to_plot)
+                    if not (math.isfinite(mag) and math.isfinite(phase_rad)): continue
+                    color = self.waveform_plot_colors[voltage_plot_idx_counter % len(self.waveform_plot_colors)]
+                    linestyle_idx = (voltage_plot_idx_counter // len(self.waveform_plot_colors)) % len(self.waveform_plot_linestyles)
+                    linestyle = self.waveform_plot_linestyles[linestyle_idx]
+                    y_values = mag * np.cos(omega * t_values + phase_rad)
+                    self.ax_waveforms.plot(t_values, y_values, label=label_text, color=color, linestyle=linestyle)
+                    voltage_plot_idx_counter += 1
+
+        # Plotar Correntes de Linha de Fontes Trifásicas
+        for key, var in self.waveform_selection_vars.get("three_phase_source_line_currents", {}).items():
+            if var.get():
+                parent_name, phase_char = key
+                phasor_to_plot = None
+                label_text = f"I_{phase_char}({parent_name})(t)"
+
+                source_details = self.three_phase_source_details_map.get(parent_name)
+                if not source_details: continue
+
+                if source_details['type'] == 'VSY':
+                    decomposed_comp_name = f"{parent_name}_{phase_char}"
+                    phasor_to_plot = self.analysis_results['component_currents_phasors'].get(decomposed_comp_name)
+                elif source_details['type'] == 'VSD':
+                    all_comp_currents = self.analysis_results.get('component_currents_phasors', {})
+                    i_ab = all_comp_currents.get(f"{parent_name}_AB")
+                    i_bc = all_comp_currents.get(f"{parent_name}_BC")
+                    i_ca = all_comp_currents.get(f"{parent_name}_CA")
+                    if phase_char == 'A' and i_ab is not None and i_ca is not None: phasor_to_plot = i_ab - i_ca
+                    elif phase_char == 'B' and i_bc is not None and i_ab is not None: phasor_to_plot = i_bc - i_ab
+                    elif phase_char == 'C' and i_ca is not None and i_bc is not None: phasor_to_plot = i_ca - i_bc
+                
+                if phasor_to_plot is not None:
+                    mag, phase_rad = abs(phasor_to_plot), cmath.phase(phasor_to_plot)
+                    if not (math.isfinite(mag) and math.isfinite(phase_rad)): continue
+                    effective_current_plot_index = voltage_plot_idx_counter + current_plot_idx_counter
+                    color = self.waveform_plot_colors[effective_current_plot_index % len(self.waveform_plot_colors)]
+                    linestyle_idx = (effective_current_plot_index // len(self.waveform_plot_colors)) % len(self.waveform_plot_linestyles)
+                    linestyle = self.waveform_plot_linestyles[linestyle_idx]
+                    y_values = mag * np.cos(omega * t_values + phase_rad)
+                    self.ax_waveforms.plot(t_values, y_values, label=label_text, color=color, linestyle=linestyle) # Plot on main axis for now
+                    current_plot_idx_counter += 1
+
+        # Plotar Tensões de Linha de Fontes Trifásicas
+        for key, var in self.waveform_selection_vars.get("three_phase_source_line_voltages", {}).items():
+            if var.get():
+                parent_name, pair_char = key # e.g., "AB"
+                phasor_to_plot = None
+                label_text = f"V_{pair_char}({parent_name})(t)"
+
+                source_details = self.three_phase_source_details_map.get(parent_name)
+                if not source_details: continue
+
+                node1_orig_label = source_details.get(f'n{pair_char[0].lower()}') # e.g., 'nA'
+                node2_orig_label = source_details.get(f'n{pair_char[1].lower()}') # e.g., 'nB'
+
+                if node1_orig_label and node2_orig_label:
+                    v_node1 = self.analysis_results['nodal_voltages_phasors'].get(node1_orig_label)
+                    v_node2 = self.analysis_results['nodal_voltages_phasors'].get(node2_orig_label)
+                    if v_node1 is not None and v_node2 is not None:
+                        phasor_to_plot = v_node1 - v_node2
+                
+                if phasor_to_plot is not None:
+                    mag, phase_rad = abs(phasor_to_plot), cmath.phase(phasor_to_plot)
+                    if not (math.isfinite(mag) and math.isfinite(phase_rad)): continue
+                    color = self.waveform_plot_colors[voltage_plot_idx_counter % len(self.waveform_plot_colors)]
+                    linestyle_idx = (voltage_plot_idx_counter // len(self.waveform_plot_colors)) % len(self.waveform_plot_linestyles)
+                    linestyle = self.waveform_plot_linestyles[linestyle_idx]
+                    y_values = mag * np.cos(omega * t_values + phase_rad)
+                    self.ax_waveforms.plot(t_values, y_values, label=label_text, color=color, linestyle=linestyle)
+                    voltage_plot_idx_counter += 1
+
         if not self.ax_waveforms.lines: # Se nada foi plotado
              self._clear_waveforms_plot(initial_message="Nenhuma forma de onda selecionada para plotar.")
              return
@@ -2709,6 +2861,15 @@ class ACCircuitAnalyzerApp:
         # For CCVS/CCCS, control_source_name is VS<suffix>
         ccvs_pattern = re.compile(r"H([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+VS([A-Z0-9_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)
         cccs_pattern = re.compile(r"F([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+VS([A-Z0-9_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)
+        # Trifásico - Fontes
+        vs_y_pattern = re.compile(r"VSY\s*([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)\s+(ABC|ACB)", re.IGNORECASE)
+        vs_d_pattern = re.compile(r"VSD\s*([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)\s+(ABC|ACB)", re.IGNORECASE)
+        # Trifásico - Cargas
+        load_y_pattern = re.compile(r"LOADY\s*([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)", re.IGNORECASE) # Nome NA NB NC NN R L C
+        load_d_pattern = re.compile(r"LOADD\s*([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)    # Nome NA NB NC R L C
+
+
+
 
         vs_source_defined_count = 0 # For auto-naming VS
         is_source_defined_count = 0 # For auto-naming IS
@@ -2716,6 +2877,7 @@ class ACCircuitAnalyzerApp:
         g_source_count = 0 # For VCCS
         h_source_count = 0 # For CCVS
         f_source_count = 0 # For CCCS
+        load_defined_count = 0 # For LOADY/LOADD auto-naming
 
         for line_num, line_full in enumerate(netlist_content.splitlines(), 1):
             line = line_full.strip()
@@ -2732,6 +2894,10 @@ class ACCircuitAnalyzerApp:
             m_vccs = vccs_pattern.match(line)
             m_ccvs = ccvs_pattern.match(line)
             m_cccs = cccs_pattern.match(line)
+            m_vsy = vs_y_pattern.match(line)
+            m_vsd = vs_d_pattern.match(line)
+            m_loady = load_y_pattern.match(line)
+            m_loadd = load_d_pattern.match(line)
 
             if m_vs:
                 vs_source_defined_count += 1
@@ -2754,7 +2920,8 @@ class ACCircuitAnalyzerApp:
                     parsed_components_list.append({
                         'type': 'VS', 'name': name, 'nodes': (node1, node2),
                         'v_mag': v_mag, 'v_phase_deg': v_phase_deg,
-                        'value': v_mag # 'value' for consistency, might represent magnitude
+                        'value': v_mag, # 'value' for consistency, might represent magnitude
+                        'original_line': f"# Original: {line_full}"
                     })
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for VS {name}.")
@@ -2770,7 +2937,8 @@ class ACCircuitAnalyzerApp:
                         error_log.append(L_PREFIX + f"Component {comp_type_char} {name} value ({value}) cannot be negative. Using absolute value.")
                         value = abs(value) # Or error out depending on strictness
                     parsed_components_list.append({
-                        'type': comp_type_char, 'name': name, 'nodes': (node1, node2), 'value': value
+                        'type': comp_type_char, 'name': name, 'nodes': (node1, node2), 'value': value,
+                        'original_line': f"# Original: {line_full}"
                     })
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for {comp_type_char} {name}.")
@@ -2795,7 +2963,8 @@ class ACCircuitAnalyzerApp:
                     parsed_components_list.append({
                         'type': 'IS', 'name': name, 'nodes': (node_out, node_in),
                         'i_mag': i_mag, 'i_phase_deg': i_phase_deg,
-                        'value': i_mag # 'value' for consistency, represents magnitude
+                        'value': i_mag, # 'value' for consistency, represents magnitude
+                        'original_line': f"# Original: {line_full}"
                     })
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for IS {name}.")
@@ -2825,7 +2994,8 @@ class ACCircuitAnalyzerApp:
                         'nodes': (node_p, node_n),
                         'control_nodes': (ctrl_node_p, ctrl_node_n),
                         'control_source_name': None,
-                        'gain': gain, 'value': gain
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
                     })
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for gain of VCVS {name}.")
@@ -2843,7 +3013,8 @@ class ACCircuitAnalyzerApp:
                         'nodes': (node_out, node_in),
                         'control_nodes': (ctrl_node_p, ctrl_node_n),
                         'control_source_name': None,
-                        'gain': gain, 'value': gain
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
                     })
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for gain (transconductance) of VCCS {name}.")
@@ -2862,7 +3033,8 @@ class ACCircuitAnalyzerApp:
                         'nodes': (node_p, node_n),
                         'control_nodes': None,
                         'control_source_name': control_source_fullname,
-                        'gain': gain, 'value': gain
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
                     })
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for gain (transresistance) of CCVS {name}.")
@@ -2881,10 +3053,145 @@ class ACCircuitAnalyzerApp:
                         'nodes': (node_out, node_in),
                         'control_nodes': None,
                         'control_source_name': control_source_fullname,
-                        'gain': gain, 'value': gain
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
                     })
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for gain (current gain) of CCCS {name}.")
+                    continue
+            elif m_vsy:
+                name_suffix = m_vsy.group(1)
+                base_name = "VSY" + name_suffix if name_suffix else f"VSY_auto{vs_source_defined_count + is_source_defined_count + 1}" # Make it unique
+                vs_source_defined_count +=1 # Consumes a "source" name
+                node_a_str, node_b_str, node_c_str, node_n_str = m_vsy.group(2), m_vsy.group(3), m_vsy.group(4), m_vsy.group(5)
+                try:
+                    # Store original node names for VSY
+                    self.three_phase_source_details_map[base_name] = {
+                        'type': 'VSY', 'nA': node_a_str, 'nB': node_b_str, 'nC': node_c_str, 'nN': node_n_str
+                    }
+                    v_mag = float(m_vsy.group(6))
+                    v_phase_a_deg = float(m_vsy.group(7))
+                    sequence = m_vsy.group(8).upper()
+                    original_line_info = f"# Original: {line_full}"
+
+                    # Fase A
+                    parsed_components_list.append({
+                        'type': 'VS', 'name': f"{base_name}_A", 'nodes': (node_a_str, node_n_str),
+                        'v_mag': v_mag, 'v_phase_deg': v_phase_a_deg, 'value': v_mag, 
+                        'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'VSY'
+                    })
+                    # Fase B
+                    phase_b_offset = -120 if sequence == "ABC" else 120
+                    parsed_components_list.append({
+                        'type': 'VS', 'name': f"{base_name}_B", 'nodes': (node_b_str, node_n_str),
+                        'v_mag': v_mag, 'v_phase_deg': v_phase_a_deg + phase_b_offset, 'value': v_mag, 
+                        'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'VSY'
+                    })
+                    # Fase C
+                    phase_c_offset = 120 if sequence == "ABC" else -120
+                    parsed_components_list.append({'type': 'VS', 'name': f"{base_name}_C", 'nodes': (node_c_str, node_n_str),
+                                                   'v_mag': v_mag, 'v_phase_deg': v_phase_a_deg + phase_c_offset, 'value': v_mag, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'VSY'})
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for VSY {base_name}.")
+                    continue
+            elif m_vsd:
+                name_suffix = m_vsd.group(1)
+                base_name = "VSD" + name_suffix if name_suffix else f"VSD_auto{vs_source_defined_count + is_source_defined_count + 1}"
+                vs_source_defined_count +=1
+                node_a_str, node_b_str, node_c_str = m_vsd.group(2), m_vsd.group(3), m_vsd.group(4) # Nodes for Vab, Vbc, Vca connections
+                try:
+                    # Store original node names for VSD
+                    self.three_phase_source_details_map[base_name] = {
+                        'type': 'VSD', 'nA': node_a_str, 'nB': node_b_str, 'nC': node_c_str
+                    }
+                    v_linha_mag = float(m_vsd.group(5))
+                    v_linha_fase_ab_deg = float(m_vsd.group(6))
+                    sequence = m_vsd.group(7).upper()
+                    original_line_info = f"# Original: {line_full}"
+
+                    # Fonte AB
+                    parsed_components_list.append({
+                        'type': 'VS', 'name': f"{base_name}_AB", 'nodes': (node_a_str, node_b_str),
+                        'v_mag': v_linha_mag, 'v_phase_deg': v_linha_fase_ab_deg, 'value': v_linha_mag, 
+                        'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'VSD'
+                    })
+                    # Fonte BC
+                    phase_bc_offset = -120 if sequence == "ABC" else 120
+                    parsed_components_list.append({
+                        'type': 'VS', 'name': f"{base_name}_BC", 'nodes': (node_b_str, node_c_str),
+                        'v_mag': v_linha_mag, 'v_phase_deg': v_linha_fase_ab_deg + phase_bc_offset, 'value': v_linha_mag, 
+                        'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'VSD'
+                    })
+                    # Fonte CA
+                    phase_ca_offset = 120 if sequence == "ABC" else -120
+                    parsed_components_list.append({'type': 'VS', 'name': f"{base_name}_CA", 'nodes': (node_c_str, node_a_str),
+                                                   'v_mag': v_linha_mag, 'v_phase_deg': v_linha_fase_ab_deg + phase_ca_offset, 'value': v_linha_mag, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'VSD'})
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for VSD {base_name}.")
+                    continue
+            elif m_loady:
+                name_suffix = m_loady.group(1)
+                load_defined_count += 1
+                base_name = "LOADY" + name_suffix if name_suffix else f"LOADY_auto{load_defined_count}"
+                node_a_str, node_b_str, node_c_str, node_n_str = m_loady.group(2), m_loady.group(3), m_loady.group(4), m_loady.group(5)
+                try:
+                    r_f = float(m_loady.group(6))
+                    l_f = float(m_loady.group(7))
+                    c_f = float(m_loady.group(8))
+                    original_line_info = f"# Original: {line_full}"
+
+                    # nodes_phase_str = [node_a_str, node_b_str, node_c_str]
+                    # phase_labels = ['A', 'B', 'C']
+                    # for i in range(3):
+                    #    current_phase_node_str = nodes_phase_str[i]
+                    #    current_phase_label = phase_labels[i]
+                    for current_phase_label, current_phase_node_str in [('A', node_a_str), ('B', node_b_str), ('C', node_c_str)]:
+                        if r_f > 1e-12: # Per prompt, or 1e-9 from previous diff
+                            parsed_components_list.append({
+                                'type': 'R', 'name': f"R_{base_name}_{current_phase_label}", 'nodes': (current_phase_node_str, node_n_str),
+                                'value': r_f, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADY'})
+                        if l_f > 1e-12: 
+                            parsed_components_list.append({
+                                'type': 'L', 'name': f"L_{base_name}_{current_phase_label}", 'nodes': (current_phase_node_str, node_n_str),
+                                'value': l_f, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADY'})
+                        if c_f > 1e-15: 
+                            parsed_components_list.append({
+                                'type': 'C', 'name': f"C_{base_name}_{current_phase_label}", 'nodes': (current_phase_node_str, node_n_str),
+                                'value': c_f, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADY'})
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for LOADY {base_name}.")
+                    continue
+            elif m_loadd:
+                name_suffix = m_loadd.group(1)
+                load_defined_count += 1
+                base_name = "LOADD" + name_suffix if name_suffix else f"LOADD_auto{load_defined_count}"
+                node_a_str, node_b_str, node_c_str = m_loadd.group(2), m_loadd.group(3), m_loadd.group(4) # Nodes for Z_AB, Z_BC, Z_CA
+                try:
+                    r_fd = float(m_loadd.group(5))
+                    l_fd = float(m_loadd.group(6))
+                    c_fd = float(m_loadd.group(7))
+                    original_line_info = f"# Original: {line_full}"
+
+                    delta_connections = [
+                        (node_a_str, node_b_str, "AB"), # node1_str, node2_str, phase_pair_label
+                        (node_b_str, node_c_str, "BC"),
+                        (node_c_str, node_a_str, "CA") 
+                    ]
+                    for node1_str_conn, node2_str_conn, phase_pair_label in delta_connections:
+                        if r_fd > 1e-12: # Per prompt, or 1e-9 from previous diff
+                            parsed_components_list.append({
+                                'type': 'R', 'name': f"R_{base_name}_{phase_pair_label}", 'nodes': (node1_str_conn, node2_str_conn),
+                                'value': r_fd, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADD'})
+                        if l_fd > 1e-12:
+                            parsed_components_list.append({
+                                'type': 'L', 'name': f"L_{base_name}_{phase_pair_label}", 'nodes': (node1_str_conn, node2_str_conn),
+                                'value': l_fd, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADD'})
+                        if c_fd > 1e-15:
+                            parsed_components_list.append({
+                                'type': 'C', 'name': f"C_{base_name}_{phase_pair_label}", 'nodes': (node1_str_conn, node2_str_conn),
+                                'value': c_fd, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADD'}) 
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for LOADD {base_name}.")
                     continue
             else:
                 error_log.append(L_PREFIX + f"Unrecognized netlist syntax: '{line_full}'")
@@ -2969,6 +3276,161 @@ class ACCircuitAnalyzerApp:
 
         return parsed_components_list, freq_from_netlist, error_log
 
+    def _calculate_three_phase_results(self, analysis_results_mono, parsed_components_list):
+        three_phase_summary = {}
+        if not analysis_results_mono or not parsed_components_list:
+            return three_phase_summary
+
+        # 1. Group components by their three_phase_parent
+        grouped_by_parent = {}
+        for comp_mono in parsed_components_list:
+            parent_name = comp_mono.get('three_phase_parent')
+            if parent_name:
+                if parent_name not in grouped_by_parent:
+                    grouped_by_parent[parent_name] = {
+                        'type': comp_mono.get('three_phase_type'),
+                        'components_mono': [],
+                        'original_line': comp_mono.get('original_line', "N/A") # Store once
+                    }
+                grouped_by_parent[parent_name]['components_mono'].append(comp_mono)
+        
+        nodal_voltages = analysis_results_mono.get('nodal_voltages_phasors', {})
+        comp_currents_mono = analysis_results_mono.get('component_currents_phasors', {})
+        comp_voltages_mono = analysis_results_mono.get('component_voltages_phasors', {})
+
+        for parent_name, data in grouped_by_parent.items():
+            parent_type = data['type']
+            summary_data = {'type': parent_type, 'P3ph': 0.0, 'Q3ph': 0.0, 'S3ph_mag': 0.0, 'PF3ph': 1.0, 'errors': []}
+            
+            s_3ph_total_complex = 0j
+
+            if parent_type == 'VSY':
+                vs_a = next((c for c in data['components_mono'] if c['name'].endswith("_A")), None)
+                vs_b = next((c for c in data['components_mono'] if c['name'].endswith("_B")), None)
+                vs_c = next((c for c in data['components_mono'] if c['name'].endswith("_C")), None)
+
+                if vs_a and vs_b and vs_c:
+                    v_an = comp_voltages_mono.get(vs_a['name'], 0j) # Voltage across the source itself
+                    v_bn = comp_voltages_mono.get(vs_b['name'], 0j)
+                    v_cn = comp_voltages_mono.get(vs_c['name'], 0j)
+                    i_a = comp_currents_mono.get(vs_a['name'], 0j)
+                    i_b = comp_currents_mono.get(vs_b['name'], 0j)
+                    i_c = comp_currents_mono.get(vs_c['name'], 0j)
+
+                    s_3ph_total_complex = (v_an * i_a.conjugate() + 
+                                           v_bn * i_b.conjugate() + 
+                                           v_cn * i_c.conjugate())
+                    
+                    summary_data['Vph_avg_mag'] = (abs(v_an) + abs(v_bn) + abs(v_cn)) / 3.0
+                    v_ab, v_bc, v_ca = v_an - v_bn, v_bn - v_cn, v_cn - v_an
+                    summary_data['Vln_avg_mag'] = (abs(v_ab) + abs(v_bc) + abs(v_ca)) / 3.0
+                    summary_data['Il_avg_mag'] = (abs(i_a) + abs(i_b) + abs(i_c)) / 3.0
+                else: summary_data['errors'].append("Fases decompostas da VSY não encontradas.")
+
+            elif parent_type == 'VSD':
+                vs_ab = next((c for c in data['components_mono'] if c['name'].endswith("_AB")), None)
+                vs_bc = next((c for c in data['components_mono'] if c['name'].endswith("_BC")), None)
+                vs_ca = next((c for c in data['components_mono'] if c['name'].endswith("_CA")), None)
+
+                if vs_ab and vs_bc and vs_ca:
+                    v_ab_src = comp_voltages_mono.get(vs_ab['name'], 0j)
+                    v_bc_src = comp_voltages_mono.get(vs_bc['name'], 0j)
+                    v_ca_src = comp_voltages_mono.get(vs_ca['name'], 0j)
+                    i_ab_src = comp_currents_mono.get(vs_ab['name'], 0j) # Current through internal delta source AB
+                    i_bc_src = comp_currents_mono.get(vs_bc['name'], 0j)
+                    i_ca_src = comp_currents_mono.get(vs_ca['name'], 0j)
+
+                    s_3ph_total_complex = (v_ab_src * i_ab_src.conjugate() +
+                                           v_bc_src * i_bc_src.conjugate() +
+                                           v_ca_src * i_ca_src.conjugate())
+
+                    summary_data['Vln_avg_mag'] = (abs(v_ab_src) + abs(v_bc_src) + abs(v_ca_src)) / 3.0
+                    i_la, i_lb, i_lc = i_ab_src - i_ca_src, i_bc_src - i_ab_src, i_ca_src - i_bc_src
+                    summary_data['Il_avg_mag'] = (abs(i_la) + abs(i_lb) + abs(i_lc)) / 3.0
+                else: summary_data['errors'].append("Fases decompostas da VSD não encontradas.")
+
+            elif parent_type == 'LOADY':
+                # Assume balanced load for Z_phase display, but calculate power from individual phases
+                v_phases, i_phases, z_phases = [], [], []
+                for phase_label in ['A', 'B', 'C']:
+                    # Find nodes for this phase of the LOADY
+                    # Example: R_LOADY1_A has nodes (nA, nN)
+                    comp_r = next((c for c in data['components_mono'] if c['name'] == f"R_{parent_name}_{phase_label}"), None)
+                    comp_l = next((c for c in data['components_mono'] if c['name'] == f"L_{parent_name}_{phase_label}"), None)
+                    comp_c = next((c for c in data['components_mono'] if c['name'] == f"C_{parent_name}_{phase_label}"), None)
+                    
+                    # Determine phase node and neutral node from any of the components
+                    ref_comp_for_nodes = comp_r or comp_l or comp_c
+                    if not ref_comp_for_nodes: continue # Skip phase if no components
+
+                    node_phase_str, node_neutral_str = ref_comp_for_nodes['nodes']
+                    v_ph = nodal_voltages.get(node_phase_str, 0j) - nodal_voltages.get(node_neutral_str, 0j)
+                    
+                    i_ph_total = 0j
+                    if comp_r: i_ph_total += comp_currents_mono.get(comp_r['name'], 0j)
+                    if comp_l: i_ph_total += comp_currents_mono.get(comp_l['name'], 0j)
+                    if comp_c: i_ph_total += comp_currents_mono.get(comp_c['name'], 0j)
+
+                    v_phases.append(v_ph); i_phases.append(i_ph_total)
+                    if abs(i_ph_total) > 1e-9: z_phases.append(v_ph / i_ph_total)
+                    s_3ph_total_complex += v_ph * i_ph_total.conjugate()
+
+                if v_phases and i_phases:
+                    summary_data['Vph_avg_mag'] = sum(abs(v) for v in v_phases) / len(v_phases)
+                    summary_data['Il_avg_mag'] = sum(abs(i) for i in i_phases) / len(i_phases) # For Y, I_line = I_phase
+                    if z_phases: summary_data['Zph_avg_phasor'] = sum(z_phases) / len(z_phases) # Average Z
+
+            elif parent_type == 'LOADD':
+                v_lines, i_deltas, z_deltas = [], [], []
+                line_currents_at_nodes = {'A':0j, 'B':0j, 'C':0j} # To sum for I_La, I_Lb, I_Lc
+
+                for phase_pair_label, nodes_str_pair in [("AB", ('A','B')), ("BC",('B','C')), ("CA",('C','A'))]:
+                    # Find nodes for this phase of the LOADD
+                    # Example: R_LOADD1_AB has nodes (nA, nB)
+                    comp_r = next((c for c in data['components_mono'] if c['name'] == f"R_{parent_name}_{phase_pair_label}"), None)
+                    comp_l = next((c for c in data['components_mono'] if c['name'] == f"L_{parent_name}_{phase_pair_label}"), None)
+                    comp_c = next((c for c in data['components_mono'] if c['name'] == f"C_{parent_name}_{phase_pair_label}"), None)
+
+                    ref_comp_for_nodes = comp_r or comp_l or comp_c
+                    if not ref_comp_for_nodes: continue
+
+                    node1_str, node2_str = ref_comp_for_nodes['nodes']
+                    v_line = nodal_voltages.get(node1_str, 0j) - nodal_voltages.get(node2_str, 0j)
+                    
+                    i_delta_total = 0j
+                    if comp_r: i_delta_total += comp_currents_mono.get(comp_r['name'], 0j)
+                    if comp_l: i_delta_total += comp_currents_mono.get(comp_l['name'], 0j)
+                    if comp_c: i_delta_total += comp_currents_mono.get(comp_c['name'], 0j)
+
+                    v_lines.append(v_line); i_deltas.append(i_delta_total)
+                    if abs(i_delta_total) > 1e-9: z_deltas.append(v_line / i_delta_total)
+                    s_3ph_total_complex += v_line * i_delta_total.conjugate()
+
+                    # Accumulate for line currents: I_La = I_AB - I_CA, etc.
+                    # Node labels A, B, C are from the original LOADD definition (e.g. LOADD1 NA NB NC R L C)
+                    # We need to map phase_pair_label (AB, BC, CA) to the actual node names.
+                    # This requires parsing the original_line or storing nodes with the parent.
+                    # For now, assume a simple mapping if possible, or skip detailed line current calculation here.
+                    # The power calculation is correct based on internal delta currents and voltages.
+
+                if v_lines and i_deltas:
+                    summary_data['Vln_avg_mag'] = sum(abs(v) for v in v_lines) / len(v_lines) # For Delta, V_line = V_phase
+                    # Line current calculation for Delta is more involved if not directly available.
+                    # For now, report average delta current as "Iph_avg_mag"
+                    summary_data['Iph_avg_mag'] = sum(abs(i) for i in i_deltas) / len(i_deltas)
+                    if z_deltas: summary_data['Zph_avg_phasor'] = sum(z_deltas) / len(z_deltas)
+
+            summary_data['P3ph'] = s_3ph_total_complex.real
+            summary_data['Q3ph'] = s_3ph_total_complex.imag
+            summary_data['S3ph_mag'] = abs(s_3ph_total_complex)
+            if summary_data['S3ph_mag'] > 1e-9:
+                summary_data['PF3ph'] = summary_data['P3ph'] / summary_data['S3ph_mag']
+                summary_data['PF3ph'] = max(-1.0, min(1.0, summary_data['PF3ph'])) # Clamp
+            else:
+                summary_data['PF3ph'] = 1.0 if abs(summary_data['P3ph']) < 1e-9 else 0.0
+
+            three_phase_summary[parent_name] = summary_data
+        return three_phase_summary
 
     def _on_parameter_change(self, event=None, from_combobox_value=None):
         self.analysis_performed_successfully = False
@@ -3114,9 +3576,12 @@ class ACCircuitAnalyzerApp:
             "# --- Fontes Controladas (Exemplos) ---\n"
             "# E_exemplo 3 0 1 2 2.0      # VCVS: E<nome> <nó+> <nó-> <nó_ctrl+> <nó_ctrl-> <ganho_V>\n"
             "# G_exemplo 4 0 1 2 0.1      # VCCS: G<nome> <nó_saída> <nó_entrada> <nó_ctrl+> <nó_ctrl-> <transcond_Gm>\n"
-            "# VS_mon 5 0 AC 1 0          # Fonte VS para monitorar corrente para H e F (exemplo)\n"
+            "# VS_mon 5 0 AC 1 0          # Fonte VS para monitorar corrente para H e F (exemplo)\n" # Note: VS_mon must be unique if multiple H/F sources use different monitor points.
             "# H_exemplo 6 0 VS_mon 50    # CCVS: H<nome> <nó+> <nó-> <nome_VS_monitor> <ganho_Rm>\n"
-            "# F_exemplo 7 0 VS_mon 100   # CCCS: F<nome> <nó_saída> <nó_entrada> <nome_VS_monitor> <ganho_beta>\n"
+            "# F_exemplo 7 0 VS_mon 100   # CCCS: F<nome> <nó_saída> <nó_entrada> <nome_VS_monitor> <ganho_beta>\n\n"
+            "# --- Elementos Trifásicos (Exemplos) ---\n"
+            "# VSY FonteY 1 2 3 N_Y AC 127 0 ABC   # Fonte Y: Nome, nA, nB, nC, nN, AC, Vmag_fase, Vfas_faseA, Seq\n"
+            "# LOADY CargaY 1 2 3 N_Y 10 0.01 0    # Carga Y: Nome, nA, nB, nC, nN, R_f, L_f, C_f\n"
         )
         self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self.results_text.configure(state="disabled")
         self._clear_main_plot(initial_message="Diagrama Fasorial: Insira netlist e analise.")
@@ -3135,13 +3600,15 @@ class ACCircuitAnalyzerApp:
         if self.about_dialog_window and self.about_dialog_window.winfo_exists(): self.about_dialog_window.lift(); self.about_dialog_window.focus_set(); return
         self.about_dialog_window=ctk.CTkToplevel(self.master); self.about_dialog_window.title("Sobre Analisador de Circuito CA"); self.about_dialog_window.geometry("500x680") # Slightly taller
         self.about_dialog_window.transient(self.master); self.about_dialog_window.after(50,self._grab_toplevel_safely,self.about_dialog_window)
-        scroll_frame=ctk.CTkScrollableFrame(self.about_dialog_window,fg_color="transparent"); scroll_frame.pack(expand=True,fill="both")
+        scroll_frame=ctk.CTkScrollableFrame(self.about_dialog_window); scroll_frame.pack(expand=True,fill="both") # Removed fg_color for default
         content_frame=ctk.CTkFrame(scroll_frame); content_frame.pack(expand=True,fill="x",padx=15,pady=15)
         ctk.CTkLabel(content_frame,text="Analisador de Circuito CA",font=ctk.CTkFont(size=18,weight="bold")).pack(pady=(0,10))
-        info_text=("**Versão:** 3.2.0 (Parse Fontes Controladas)\n\nFerramenta para análise de circuitos CA em frequência única.\n\n"
+        info_text=("**Versão:** 3.3.0 (Parse Trifásico Inicial)\n\nFerramenta para análise de circuitos CA em frequência única.\n\n"
                    "**Funcionalidades Atuais:**\n- Análise Nodal de circuitos RLC com fontes de tensão CA independentes.\n"
                    "- Entrada via Netlist simplificada.\n"
                    "- Suporte a fontes de corrente CA independentes (IS).\n"
+                   "- Parser para fontes trifásicas (VSY, VSD) e cargas (LOADY, LOADD) equilibradas,\n"
+                   "  decompondo-as em equivalentes monofásicos para análise.\n"
                    "- Reconhecimento de fontes controladas (VCVS, VCCS, CCVS, CCCS) na netlist.\n"
                    "- Cálculo de tensões nodais, correntes e tensões em componentes.\n"
                    "- Cálculo de potência (P,Q,S) e Fator de Potência para a fonte principal.\n"
@@ -3151,6 +3618,7 @@ class ACCircuitAnalyzerApp:
                    "- Salvar/Carregar configurações (incluindo netlist).\n\n"
                    "**Roadmap:**\n- Suporte a supernós (fontes de tensão flutuantes).\n"
                    "- Estampagem MNA completa para fontes controladas (VCVS, VCCS, CCVS, CCCS).\n"
+                   "- Análise de sistemas trifásicos desequilibrados (longo prazo).\n"
                    "- Melhorias no desenho do diagrama de circuito a partir da netlist.\n"
                    "- Análise de varredura de frequência.\n"
                    "- Editor Visual (Longo prazo).")
@@ -3951,6 +4419,7 @@ class ACCircuitAnalyzerApp:
         self.results_text.configure(state="normal"); self.results_text.delete("1.0","end"); self._clear_all_entry_error_styles(); self.analysis_performed_successfully=False
         self.analysis_results = {}
         output_text=""
+        self.three_phase_source_details_map = {} # Reset for current analysis
 
         netlist_content = self.netlist_textbox.get("1.0", tk.END).strip()
 
@@ -3999,6 +4468,7 @@ class ACCircuitAnalyzerApp:
         try:
             self.analysis_results = self._perform_nodal_analysis(parsed_components, frequency)
 
+            # Calculate and add three-phase summary if applicable
             self.current_p_real = self.analysis_results.get('p_total_avg_W')
             self.current_q_reactive = self.analysis_results.get('q_total_VAR')
             self.current_s_apparent = self.analysis_results.get('s_total_apparent_VA')
@@ -4006,6 +4476,9 @@ class ACCircuitAnalyzerApp:
             vs_phasor_for_pf = self.analysis_results.get('v_source_phasor')
             self.current_v_load_mag= abs(vs_phasor_for_pf) if vs_phasor_for_pf else 0
             self.current_freq = frequency
+
+            if any(comp.get('three_phase_parent') for comp in parsed_components):
+                self.analysis_results['three_phase_summary'] = self._calculate_three_phase_results(self.analysis_results, parsed_components)
 
             if self.analysis_results.get('error_messages'):
                 output_text += "Análise Nodal encontrou problemas:\n" + "\n".join(self.analysis_results['error_messages']) + "\n\n"
@@ -4016,7 +4489,7 @@ class ACCircuitAnalyzerApp:
 
 
             self._update_static_circuit_diagram_from_netlist(parsed_components, frequency, self.analysis_results)
-            self._update_phasor_diagram_from_nodal(self.analysis_results, parsed_components)
+            self._update_phasor_diagram_from_nodal(self.analysis_results) # Pass parsed_components via self
             self._plot_time_domain_waveforms() # Plot waveforms
             self._update_waveform_selection_ui() # Update selection UI after analysis
 
@@ -4029,6 +4502,7 @@ class ACCircuitAnalyzerApp:
             self._clear_waveforms_plot(error_message="Erro durante a análise.")
             self._update_waveform_selection_ui() # Update UI even on error (shows "Execute análise...")
             self.analysis_performed_successfully = False
+            self.parsed_components_for_plotting = [] # Clear on error
         finally:
             self.progress_bar.stop();self.progress_bar.pack_forget();self.progress_bar_frame.pack_forget();
             self.results_text.configure(state="normal") # Ensure it's normal before inserting
@@ -4036,6 +4510,8 @@ class ACCircuitAnalyzerApp:
             self.results_text.insert("1.0", output_text if output_text.strip() else "Análise concluída. Verifique os resultados.")
             self.results_text.configure(state="disabled")
 
+        if self.analysis_performed_successfully:
+            self.parsed_components_for_plotting = parsed_components # Store for plotter
 
     def _generate_nodal_analysis_details_text(self, nodal_results, parsed_components):
         if not nodal_results: return "A análise nodal não produziu resultados."
@@ -4115,6 +4591,32 @@ class ACCircuitAnalyzerApp:
                 elif abs(q_tot if q_tot is not None else 0) < 1e-9 : fp_type_str = " (unitário)"
                 else: fp_type_str = " (indutivo/atrasado)" if (q_tot if q_tot is not None else 0) > 0 else " (capacitivo/adiantado)"
                 output += f"  FP_total: {self._format_value(fp_tot)}{fp_type_str}\n"
+        
+        # --- Three-Phase Summary Section ---
+        three_phase_summary_results = nodal_results.get('three_phase_summary')
+        if three_phase_summary_results:
+            output += "\n--- Resumos Trifásicos (@ f = " + self._format_value(freq, 'Hz') + ") ---\n"
+            for parent_name, summary in three_phase_summary_results.items():
+                output += f"Elemento Original: {parent_name} (Tipo: {summary.get('type', 'N/A')})\n"
+                if summary.get('errors'):
+                    output += "  Erros no cálculo trifásico:\n" + "\n".join(f"    - {e}" for e in summary['errors']) + "\n"
+
+                if 'Vph_avg_mag' in summary: output += f"  Tensão de Fase Média (Vφ): {self._format_value(summary['Vph_avg_mag'], 'V')}\n"
+                if 'Vln_avg_mag' in summary: output += f"  Tensão de Linha Média (VL-L): {self._format_value(summary['Vln_avg_mag'], 'V')}\n"
+                if 'Il_avg_mag' in summary:  output += f"  Corrente de Linha Média (IL): {self._format_value(summary['Il_avg_mag'], 'A')}\n"
+                if 'Iph_avg_mag' in summary and 'Il_avg_mag' not in summary : # For Delta loads, show phase current if line current wasn't easily derived
+                     output += f"  Corrente de Fase Média (Iφ): {self._format_value(summary['Iph_avg_mag'], 'A')}\n"
+                if 'Zph_avg_phasor' in summary: output += f"  Impedância por Fase Média (Zφ): {self.format_phasor(summary['Zph_avg_phasor'], 'Ω')}\n"
+                
+                output += f"  Potência Ativa Total (P₃φ): {self._format_value(summary.get('P3ph', 0.0), 'W')}\n"
+                output += f"  Potência Reativa Total (Q₃φ): {self._format_value(summary.get('Q3ph', 0.0), 'VAR')}\n"
+                output += f"  Potência Aparente Total (S₃φ): {self._format_value(summary.get('S3ph_mag', 0.0), 'VA')}\n"
+                
+                fp3ph_val = summary.get('PF3ph', 1.0)
+                q3ph_val = summary.get('Q3ph', 0.0)
+                fp3ph_type = " (unitário)" if abs(q3ph_val) < 1e-9 else (" (indutivo/atrasado)" if q3ph_val > 0 else " (capacitivo/adiantado)")
+                output += f"  Fator de Potência Trifásico (FP₃φ): {self._format_value(fp3ph_val)}{fp3ph_type}\n"
+                output += "\n"
         return output
 
 
@@ -4330,13 +4832,14 @@ class ACCircuitAnalyzerApp:
 
         print("[DEBUG] _update_static_circuit_diagram_from_netlist (placeholder) executado.")
 
-    def _update_phasor_diagram_from_nodal(self, nodal_results, parsed_components_list):
+    def _update_phasor_diagram_from_nodal(self, nodal_results):
         if not self.ax_main_plot or not nodal_results or not self.analysis_performed_successfully :
             self._clear_main_plot(error_message="Dados insuficientes ou erro na análise nodal para fasores.")
             return
-        if not parsed_components_list: # Need parsed components to identify RLC types
-            self._clear_main_plot(error_message="Lista de componentes não disponível para detalhar fasores de corrente RLC.")
-            return
+        # Use self.parsed_components_for_plotting which should be set by analyze_circuit
+        # if not self.parsed_components_for_plotting:
+        #     self._clear_main_plot(error_message="Lista de componentes parseados não disponível para detalhar fasores.")
+        #     return
 
         print("\n[DEBUG] Entrando em _update_phasor_diagram_from_nodal")
         # Surgical clear before plotting new data
@@ -4372,16 +4875,93 @@ class ACCircuitAnalyzerApp:
             if comp_name.upper().startswith("IS"): # Check if it's an IS component
                 phasors_to_plot[f"$I_{{{comp_name}}}$"] = comp_current_phasor
         
-        # Plot currents through R, L, C components
+        # Plot currents through R, L, C components (if self.parsed_components_for_plotting is available)
         component_currents = nodal_results.get('component_currents_phasors', {})
-        for comp_spec in parsed_components_list:
-            comp_type = comp_spec['type'].upper()
-            if comp_type in ['R', 'L', 'C']:
-                comp_name = comp_spec['name']
-                i_phasor = component_currents.get(comp_name)
-                if i_phasor is not None:
-                    phasors_to_plot[f"$I_{{{comp_name}}}$ ({comp_type})"] = i_phasor
+        if hasattr(self, 'parsed_components_for_plotting') and self.parsed_components_for_plotting:
+            for comp_spec in self.parsed_components_for_plotting:
+                comp_type = comp_spec['type'].upper()
+                if comp_type in ['R', 'L', 'C']:
+                    comp_name = comp_spec['name']
+                    i_phasor = component_currents.get(comp_name)
+                    if i_phasor is not None:
+                        phasors_to_plot[f"$I_{{{comp_name}}}$ ({comp_type})"] = i_phasor
 
+        # --- Three-Phase Source Phasor Plotting ---
+        first_three_phase_source_parent_name = None
+        first_three_phase_source_type = None
+        if hasattr(self, 'parsed_components_for_plotting') and self.parsed_components_for_plotting:
+            for comp_spec in self.parsed_components_for_plotting:
+                if comp_spec.get('three_phase_parent') and comp_spec.get('three_phase_type') in ['VSY', 'VSD']:
+                    first_three_phase_source_parent_name = comp_spec['three_phase_parent']
+                    first_three_phase_source_type = comp_spec['three_phase_type']
+                    break
+
+        if first_three_phase_source_parent_name:
+            print(f"[DEBUG] Plotting three-phase source: {first_three_phase_source_parent_name} ({first_three_phase_source_type})")
+            if first_three_phase_source_type == 'VSY':
+                phase_labels_map_v = {'A': 'AN', 'B': 'BN', 'C': 'CN'}
+                current_phase_labels_i = ['A', 'B', 'C']
+
+                for original_phase_char in ['A', 'B', 'C']:
+                    decomposed_comp_name = f"{first_three_phase_source_parent_name}_{original_phase_char}"
+
+                    v_phase_phasor = nodal_results.get('component_voltages_phasors', {}).get(decomposed_comp_name)
+                    if v_phase_phasor is not None:
+                        label_suffix_v = phase_labels_map_v.get(original_phase_char, original_phase_char + "N_ERR")
+                        phasors_to_plot[f"$V_{{{label_suffix_v}}}$ ({first_three_phase_source_parent_name})"] = v_phase_phasor
+
+                    i_line_phasor = nodal_results.get('component_currents_phasors', {}).get(decomposed_comp_name)
+                    if i_line_phasor is not None:
+                        label_suffix_i = current_phase_labels_i[ord(original_phase_char) - ord('A')]
+                        phasors_to_plot[f"$I_{{{label_suffix_i}}}$ ({first_three_phase_source_parent_name})"] = i_line_phasor
+
+            elif first_three_phase_source_type == 'VSD':
+                phase_pair_labels_v = {'AB': 'AB', 'BC': 'BC', 'CA': 'CA'} # For V_LL
+                # For I_delta (currents in the delta windings)
+                delta_current_labels_i = {'AB': 'AB', 'BC': 'BC', 'CA': 'CA'}
+                # For I_line (currents leaving the A,B,C terminals of the VSD)
+                line_current_labels_i = ['A', 'B', 'C']
+                
+                currents_in_delta = {} # Store I_AB, I_BC, I_CA for line current calculation
+
+                for phase_pair_char in ['AB', 'BC', 'CA']: # Order matters for I_line calc
+                    decomposed_comp_name = f"{first_three_phase_source_parent_name}_{phase_pair_char}"
+
+                    v_line_phasor = nodal_results.get('component_voltages_phasors', {}).get(decomposed_comp_name)
+                    if v_line_phasor is not None:
+                        phasors_to_plot[f"$V_{{{phase_pair_char}}}$ ({first_three_phase_source_parent_name})"] = v_line_phasor
+
+                    i_delta_phasor = nodal_results.get('component_currents_phasors', {}).get(decomposed_comp_name)
+                    if i_delta_phasor is not None:
+                        currents_in_delta[phase_pair_char] = i_delta_phasor
+                        phasors_to_plot[rf"$I_{{\Delta,{delta_current_labels_i[phase_pair_char]}}}$ ({first_three_phase_source_parent_name})"] = i_delta_phasor
+                
+                # Calculate and add line currents for VSD
+                if 'AB' in currents_in_delta and 'CA' in currents_in_delta: phasors_to_plot[f"$I_{{L,{line_current_labels_i[0]}}}$ ({first_three_phase_source_parent_name})"] = currents_in_delta['AB'] - currents_in_delta['CA']
+                if 'BC' in currents_in_delta and 'AB' in currents_in_delta: phasors_to_plot[f"$I_{{L,{line_current_labels_i[1]}}}$ ({first_three_phase_source_parent_name})"] = currents_in_delta['BC'] - currents_in_delta['AB']
+                if 'CA' in currents_in_delta and 'BC' in currents_in_delta: phasors_to_plot[f"$I_{{L,{line_current_labels_i[2]}}}$ ({first_three_phase_source_parent_name})"] = currents_in_delta['CA'] - currents_in_delta['BC']
+
+
+            # --- NEW: Calculate and add Line-to-Line voltages for the identified three-phase source ---
+            if hasattr(self, 'three_phase_source_details_map') and \
+               first_three_phase_source_parent_name in self.three_phase_source_details_map:
+                
+                original_nodes_info = self.three_phase_source_details_map[first_three_phase_source_parent_name]
+                node_label_A = original_nodes_info.get('nA')
+                node_label_B = original_nodes_info.get('nB')
+                node_label_C = original_nodes_info.get('nC')
+
+                all_nodal_voltages_phasors = nodal_results.get('nodal_voltages_phasors', {})
+                V_A_phasor = all_nodal_voltages_phasors.get(node_label_A)
+                V_B_phasor = all_nodal_voltages_phasors.get(node_label_B)
+                V_C_phasor = all_nodal_voltages_phasors.get(node_label_C)
+
+                if V_A_phasor is not None and V_B_phasor is not None:
+                    phasors_to_plot[f"$V_{{AB}}$ ({first_three_phase_source_parent_name})"] = V_A_phasor - V_B_phasor
+                if V_B_phasor is not None and V_C_phasor is not None:
+                    phasors_to_plot[f"$V_{{BC}}$ ({first_three_phase_source_parent_name})"] = V_B_phasor - V_C_phasor
+                if V_C_phasor is not None and V_A_phasor is not None:
+                    phasors_to_plot[f"$V_{{CA}}$ ({first_three_phase_source_parent_name})"] = V_C_phasor - V_A_phasor
 
         base_colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkcyan', 'magenta', 'saddlebrown', 'olive', 'darkslateblue']
         max_val = 0; plotted_arrows = []; plotted_labels = []
@@ -4399,7 +4979,7 @@ class ACCircuitAnalyzerApp:
                 color = base_colors[i % len(base_colors)]
                 
                 # Determine linestyle and linewidth based on phasor type
-                if "$I_S$" in label or label.startswith("$I_{IS"): # Source currents (VS primary, IS)
+                if "$I_S$" in label or label.startswith("$I_{IS") or label.startswith(f"$I_{{L,") or (first_three_phase_source_parent_name and f"$I_{{" in label and first_three_phase_source_parent_name in label and not rf"$I_{{\Delta" in label): # Source line currents
                     linestyle = '--'
                     linewidth = 2.0
                 elif " (R)" in label or " (L)" in label or " (C)" in label: # Passive component currents
