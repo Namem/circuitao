@@ -34,6 +34,18 @@ class ACCircuitAnalyzerApp:
         self.include_l_var = tk.BooleanVar(value=True)
         self.include_c_var = tk.BooleanVar(value=True)
 
+        # --- Manual Three-Phase Input Variables ---
+        self.manual_3ph_source_voltage_type_var = tk.StringVar(value="Linha (VL-L)")
+        self.manual_3ph_source_mag_var = tk.StringVar(value="380") # Common VL-L
+        self.manual_3ph_source_phase_ref_var = tk.StringVar(value="0")
+        self.manual_3ph_source_config_var = tk.StringVar(value="Y (Estrela)")
+        self.manual_3ph_sequence_var = tk.StringVar(value="ABC")
+
+        self.manual_3ph_load_config_var = tk.StringVar(value="Y (Estrela)")
+        self.manual_3ph_load_r_var = tk.StringVar(value="10")
+        self.manual_3ph_load_l_var = tk.StringVar(value="0.005") # Small L
+        self.manual_3ph_load_c_var = tk.StringVar(value="0")     # Default no C
+
         self.about_dialog_window = None
 
         self.fig_main_plot = None
@@ -70,6 +82,7 @@ class ACCircuitAnalyzerApp:
 
         self.circuit_diagram_canvas = None
         self.circuit_diagram_frame = None
+        self.static_diagram_terminal_coords = {} # For static diagram wire drawing
 
         self.plot_container_frame = None
 
@@ -251,6 +264,85 @@ class ACCircuitAnalyzerApp:
         self.entry_widgets['freq_details'] = self.freq_details_entry
         # --- End Manual Input Section ---
 
+        # --- Seção Manual Trifásica ---
+        manual_3ph_main_label = ctk.CTkLabel(left_panel_scroll_frame, text="Config. Manual Trifásica Equilibrada (Opcional)",
+                                             font=ctk.CTkFont(size=16, weight="bold"))
+        manual_3ph_main_label.pack(pady=(20,5), anchor="w", padx=10) # Increased pady top
+        
+        manual_3ph_frame = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
+        manual_3ph_frame.pack(fill="x", padx=10, pady=(0,10))
+        manual_3ph_frame.grid_columnconfigure(1, weight=1) # Coluna das entradas para expandir
+
+        row_idx_3ph = 0
+        # -- Fonte --
+        ctk.CTkLabel(manual_3ph_frame, text="Fonte Trifásica:", font=ctk.CTkFont(weight="bold")).grid(row=row_idx_3ph, column=0, columnspan=2, padx=10, pady=(10,5), sticky="w")
+        row_idx_3ph += 1
+        
+        ctk.CTkLabel(manual_3ph_frame, text="Tipo Tensão:").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_source_voltage_type_selector = ctk.CTkSegmentedButton(manual_3ph_frame, values=["Linha (VL-L)", "Fase (Vf-N)"], variable=self.manual_3ph_source_voltage_type_var)
+        self.manual_3ph_source_voltage_type_selector.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        row_idx_3ph += 1
+        
+        ctk.CTkLabel(manual_3ph_frame, text="Mag. Tensão (V):").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_source_mag_entry = ctk.CTkEntry(manual_3ph_frame, textvariable=self.manual_3ph_source_mag_var, width=entry_width)
+        self.manual_3ph_source_mag_entry.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        self.entry_widgets['manual_3ph_source_mag'] = self.manual_3ph_source_mag_entry
+        self.manual_3ph_source_mag_entry.bind("<FocusOut>", self._on_parameter_change); self.manual_3ph_source_mag_entry.bind("<Return>", self._on_parameter_change)
+        row_idx_3ph += 1
+
+        ctk.CTkLabel(manual_3ph_frame, text="Fase Ref. (°):").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_source_phase_ref_entry = ctk.CTkEntry(manual_3ph_frame, textvariable=self.manual_3ph_source_phase_ref_var, width=entry_width)
+        self.manual_3ph_source_phase_ref_entry.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        self.entry_widgets['manual_3ph_source_phase_ref'] = self.manual_3ph_source_phase_ref_entry
+        row_idx_3ph += 1
+        self.manual_3ph_source_phase_ref_entry.bind("<FocusOut>", self._on_parameter_change); self.manual_3ph_source_phase_ref_entry.bind("<Return>", self._on_parameter_change)
+
+        ctk.CTkLabel(manual_3ph_frame, text="Fonte Config.:").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_source_config_selector = ctk.CTkSegmentedButton(manual_3ph_frame, values=["Y (Estrela)", "Δ (Delta)"], variable=self.manual_3ph_source_config_var)
+        self.manual_3ph_source_config_selector.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        row_idx_3ph += 1
+
+        ctk.CTkLabel(manual_3ph_frame, text="Sequência Fase:").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_sequence_selector = ctk.CTkSegmentedButton(manual_3ph_frame, values=["ABC", "ACB"], variable=self.manual_3ph_sequence_var)
+        self.manual_3ph_sequence_selector.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        row_idx_3ph += 1
+
+        # -- Carga --
+        ctk.CTkLabel(manual_3ph_frame, text="Carga Trifásica Equilibrada:", font=ctk.CTkFont(weight="bold")).grid(row=row_idx_3ph, column=0, columnspan=2, padx=10, pady=(10,5), sticky="w")
+        row_idx_3ph += 1
+        
+        ctk.CTkLabel(manual_3ph_frame, text="Carga Config.:").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_load_config_selector = ctk.CTkSegmentedButton(manual_3ph_frame, values=["Y (Estrela)", "Δ (Delta)"], variable=self.manual_3ph_load_config_var)
+        self.manual_3ph_load_config_selector.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        row_idx_3ph += 1
+
+        ctk.CTkLabel(manual_3ph_frame, text="R por Fase (Ω):").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_load_r_entry = ctk.CTkEntry(manual_3ph_frame, textvariable=self.manual_3ph_load_r_var, width=entry_width)
+        self.manual_3ph_load_r_entry.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        self.entry_widgets['manual_3ph_load_r'] = self.manual_3ph_load_r_entry
+        self.manual_3ph_load_r_entry.bind("<FocusOut>", self._on_parameter_change); self.manual_3ph_load_r_entry.bind("<Return>", self._on_parameter_change)
+        row_idx_3ph += 1
+
+        ctk.CTkLabel(manual_3ph_frame, text="L por Fase (H):").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_load_l_entry = ctk.CTkEntry(manual_3ph_frame, textvariable=self.manual_3ph_load_l_var, width=entry_width)
+        self.manual_3ph_load_l_entry.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        self.entry_widgets['manual_3ph_load_l'] = self.manual_3ph_load_l_entry
+        self.manual_3ph_load_l_entry.bind("<FocusOut>", self._on_parameter_change); self.manual_3ph_load_l_entry.bind("<Return>", self._on_parameter_change)
+        row_idx_3ph += 1
+
+        ctk.CTkLabel(manual_3ph_frame, text="C por Fase (F):").grid(row=row_idx_3ph, column=0, padx=10, pady=5, sticky="w")
+        self.manual_3ph_load_c_entry = ctk.CTkEntry(manual_3ph_frame, textvariable=self.manual_3ph_load_c_var, width=entry_width)
+        self.manual_3ph_load_c_entry.grid(row=row_idx_3ph, column=1, padx=10, pady=5, sticky="ew")
+        self.entry_widgets['manual_3ph_load_c'] = self.manual_3ph_load_c_entry
+        self.manual_3ph_load_c_entry.bind("<FocusOut>", self._on_parameter_change); self.manual_3ph_load_c_entry.bind("<Return>", self._on_parameter_change)
+        row_idx_3ph += 1
+
+        # -- Botão de Análise --
+        self.analyze_manual_3ph_button = ctk.CTkButton(manual_3ph_frame, text="Analisar Circuito Trifásico Manual", command=self._analyze_manual_three_phase_circuit)
+        self.analyze_manual_3ph_button.grid(row=row_idx_3ph, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
+        row_idx_3ph += 1
+        # --- Fim Seção Manual Trifásica ---
+
         output_format_label = ctk.CTkLabel(left_panel_scroll_frame, text="Formatação da Saída Textual", font=ctk.CTkFont(size=16, weight="bold"))
         output_format_label.pack(pady=(15,5), anchor="w", padx=10)
         output_format_frame_main = ctk.CTkFrame(left_panel_scroll_frame, corner_radius=10)
@@ -338,7 +430,7 @@ class ACCircuitAnalyzerApp:
         self.circuit_diagram_frame.grid_columnconfigure(0, weight=1)
         self.circuit_diagram_frame.grid_rowconfigure(0, weight=1)
 
-        self.circuit_diagram_canvas = tk.Canvas(self.circuit_diagram_frame, bg=self._get_ctk_bg_color(), highlightthickness=0)
+        self.circuit_diagram_canvas = tk.Canvas(self.circuit_diagram_frame, bg=self._get_ctk_bg_color(), highlightthickness=0) # Ensure this is tk.Canvas
         self.circuit_diagram_canvas.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
         self.plot_container_frame = ctk.CTkFrame(tab_phasors, corner_radius=6)
@@ -2848,20 +2940,6 @@ class ACCircuitAnalyzerApp:
         error_log = []
 
         # Regex patterns
-        # VS<name_optional> <node+> <node-> AC <Vmag> <Vphase_deg_optional>
-        vs_pattern = re.compile(r"VS([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s*([\d\.\-eE+]*)", re.IGNORECASE)
-        # <R|L|C><name_optional> <node1> <node2> <value>
-        comp_pattern = re.compile(r"([RCL])([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\d\.eE\-+]+)", re.IGNORECASE)
-        # IS<name_optional> <node_out> <node_in> AC <Imag> <Iphase_deg_optional>
-        is_pattern = re.compile(r"IS([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s*([\d\.\-eE+]*)", re.IGNORECASE)
-        freq_pattern = re.compile(r"FREQ\s+([\d\.\-eE+]+)", re.IGNORECASE)
-        # Controlled Sources
-        vcvs_pattern = re.compile(r"E([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)
-        vccs_pattern = re.compile(r"G([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)
-        # For CCVS/CCCS, control_source_name is VS<suffix>
-        ccvs_pattern = re.compile(r"H([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+VS([A-Z0-9_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)
-        cccs_pattern = re.compile(r"F([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+VS([A-Z0-9_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)
-        # Trifásico - Fontes
         vs_y_pattern = re.compile(r"VSY\s*([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)\s+(ABC|ACB)", re.IGNORECASE)
         vs_d_pattern = re.compile(r"VSD\s*([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)\s+(ABC|ACB)", re.IGNORECASE)
         # Trifásico - Cargas
@@ -2869,6 +2947,20 @@ class ACCircuitAnalyzerApp:
         load_d_pattern = re.compile(r"LOADD\s*([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)    # Nome NA NB NC R L C
 
 
+        # Controlled Sources
+        vcvs_pattern = re.compile(r"E([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE) # E<name> n+ n- nc+ nc- gain
+        vccs_pattern = re.compile(r"G([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\w_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE) # G<name> n_out n_in nc+ nc- gm
+        ccvs_pattern = re.compile(r"H([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+VS([A-Z0-9_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)      # H<name> n+ n- VS_ctrl rm
+        cccs_pattern = re.compile(r"F([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+VS([A-Z0-9_]+)\s+([\d\.\-eE+]+)", re.IGNORECASE)      # F<name> n_out n_in VS_ctrl beta
+
+        # Standard Independent Sources (monophase)
+        vs_pattern = re.compile(r"VS([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s*([\d\.\-eE+]*)", re.IGNORECASE)
+        is_pattern = re.compile(r"IS([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+AC\s+([\d\.\-eE+]+)\s*([\d\.\-eE+]*)", re.IGNORECASE)
+
+        # Standard Passive Components (monophase)
+        comp_pattern = re.compile(r"([RCL])([A-Z0-9_]*)\s+([\w_]+)\s+([\w_]+)\s+([\d\.eE\-+]+)", re.IGNORECASE)
+
+        freq_pattern = re.compile(r"FREQ\s+([\d\.\-eE+]+)", re.IGNORECASE)
 
 
         vs_source_defined_count = 0 # For auto-naming VS
@@ -2886,90 +2978,26 @@ class ACCircuitAnalyzerApp:
             if not line or line.startswith("#") or line.startswith("*"):
                 continue
 
-            m_vs = vs_pattern.match(line)
-            m_comp = comp_pattern.match(line)
-            m_is = is_pattern.match(line)
+            # Attempt to match regex patterns in order of specificity
             m_freq = freq_pattern.match(line)
-            m_vcvs = vcvs_pattern.match(line)
-            m_vccs = vccs_pattern.match(line)
-            m_ccvs = ccvs_pattern.match(line)
-            m_cccs = cccs_pattern.match(line)
+            
             m_vsy = vs_y_pattern.match(line)
             m_vsd = vs_d_pattern.match(line)
             m_loady = load_y_pattern.match(line)
             m_loadd = load_d_pattern.match(line)
 
-            if m_vs:
-                vs_source_defined_count += 1
-                name_suffix = m_vs.group(1)
-                name = "VS" + name_suffix if name_suffix else f"VS_auto{vs_source_defined_count}"
-                node1, node2 = m_vs.group(2), m_vs.group(3)
-                try:
-                    v_mag = float(m_vs.group(4))
-                    v_phase_deg_str = m_vs.group(5)
-                    v_phase_deg = float(v_phase_deg_str) if v_phase_deg_str and v_phase_deg_str.strip() else 0.0
+            m_e_vcvs = vcvs_pattern.match(line)
+            m_g_vccs = vccs_pattern.match(line)
+            m_h_ccvs = ccvs_pattern.match(line)
+            m_f_cccs = cccs_pattern.match(line)
 
-                    if v_mag < 0: # Conventionally, Vmag is positive.
-                        error_log.append(L_PREFIX + f"VS {name} magnitude was negative. Making positive and inverting phase.")
-                        v_mag = abs(v_mag)
-                        v_phase_deg = (v_phase_deg + 180)
-                    # Normalize phase to be within a common range e.g. -180 to 180
-                    v_phase_deg = (v_phase_deg + 180) % 360 - 180
+            m_vs_mono = vs_pattern.match(line)
+            m_is_mono = is_pattern.match(line)
+            
+            m_comp_rlc = comp_pattern.match(line)
 
-
-                    parsed_components_list.append({
-                        'type': 'VS', 'name': name, 'nodes': (node1, node2),
-                        'v_mag': v_mag, 'v_phase_deg': v_phase_deg,
-                        'value': v_mag, # 'value' for consistency, might represent magnitude
-                        'original_line': f"# Original: {line_full}"
-                    })
-                except ValueError:
-                    error_log.append(L_PREFIX + f"Invalid numeric value for VS {name}.")
-                    continue
-            elif m_comp:
-                comp_type_char = m_comp.group(1).upper()
-                name_suffix = m_comp.group(2)
-                name = comp_type_char + name_suffix if name_suffix else f"{comp_type_char}_auto{len(parsed_components_list)}"
-                node1, node2 = m_comp.group(3), m_comp.group(4)
-                try:
-                    value = float(m_comp.group(5))
-                    if value < 0:
-                        error_log.append(L_PREFIX + f"Component {comp_type_char} {name} value ({value}) cannot be negative. Using absolute value.")
-                        value = abs(value) # Or error out depending on strictness
-                    parsed_components_list.append({
-                        'type': comp_type_char, 'name': name, 'nodes': (node1, node2), 'value': value,
-                        'original_line': f"# Original: {line_full}"
-                    })
-                except ValueError:
-                    error_log.append(L_PREFIX + f"Invalid numeric value for {comp_type_char} {name}.")
-                    continue
-            elif m_is:
-                is_source_defined_count += 1
-                name_suffix = m_is.group(1)
-                name = "IS" + name_suffix if name_suffix else f"IS_auto{is_source_defined_count}"
-                node_out, node_in = m_is.group(2), m_is.group(3) # node_out: current exits source, node_in: current enters source
-                try:
-                    i_mag = float(m_is.group(4))
-                    i_phase_deg_str = m_is.group(5)
-                    i_phase_deg = float(i_phase_deg_str) if i_phase_deg_str and i_phase_deg_str.strip() else 0.0
-
-                    if i_mag < 0:
-                        error_log.append(L_PREFIX + f"IS {name} magnitude was negative. Making positive and inverting phase.")
-                        i_mag = abs(i_mag)
-                        i_phase_deg = (i_phase_deg + 180)
-                    # Normalize phase
-                    i_phase_deg = (i_phase_deg + 180) % 360 - 180
-
-                    parsed_components_list.append({
-                        'type': 'IS', 'name': name, 'nodes': (node_out, node_in),
-                        'i_mag': i_mag, 'i_phase_deg': i_phase_deg,
-                        'value': i_mag, # 'value' for consistency, represents magnitude
-                        'original_line': f"# Original: {line_full}"
-                    })
-                except ValueError:
-                    error_log.append(L_PREFIX + f"Invalid numeric value for IS {name}.")
-                    continue
-            elif m_freq:
+            # Process based on which pattern matched
+            if m_freq:
                 if freq_from_netlist is not None:
                     error_log.append(L_PREFIX + "Multiple FREQ definitions. Using the last one.")
                 try:
@@ -2980,84 +3008,6 @@ class ACCircuitAnalyzerApp:
                         freq_from_netlist = freq_val
                 except ValueError:
                     error_log.append(L_PREFIX + "Invalid numeric value for FREQ.")
-                    continue
-            elif m_vcvs:
-                e_source_count += 1
-                name_suffix = m_vcvs.group(1)
-                name = "E" + name_suffix if name_suffix else f"E_auto{e_source_count}"
-                node_p, node_n = m_vcvs.group(2), m_vcvs.group(3)
-                ctrl_node_p, ctrl_node_n = m_vcvs.group(4), m_vcvs.group(5)
-                try:
-                    gain = float(m_vcvs.group(6))
-                    parsed_components_list.append({
-                        'type': 'VCVS', 'name': name,
-                        'nodes': (node_p, node_n),
-                        'control_nodes': (ctrl_node_p, ctrl_node_n),
-                        'control_source_name': None,
-                        'gain': gain, 'value': gain,
-                        'original_line': f"# Original: {line_full}"
-                    })
-                except ValueError:
-                    error_log.append(L_PREFIX + f"Invalid numeric value for gain of VCVS {name}.")
-                    continue
-            elif m_vccs:
-                g_source_count += 1
-                name_suffix = m_vccs.group(1)
-                name = "G" + name_suffix if name_suffix else f"G_auto{g_source_count}"
-                node_out, node_in = m_vccs.group(2), m_vccs.group(3)
-                ctrl_node_p, ctrl_node_n = m_vccs.group(4), m_vccs.group(5)
-                try:
-                    gain = float(m_vccs.group(6)) # Transconductance
-                    parsed_components_list.append({
-                        'type': 'VCCS', 'name': name,
-                        'nodes': (node_out, node_in),
-                        'control_nodes': (ctrl_node_p, ctrl_node_n),
-                        'control_source_name': None,
-                        'gain': gain, 'value': gain,
-                        'original_line': f"# Original: {line_full}"
-                    })
-                except ValueError:
-                    error_log.append(L_PREFIX + f"Invalid numeric value for gain (transconductance) of VCCS {name}.")
-                    continue
-            elif m_ccvs:
-                h_source_count += 1
-                name_suffix = m_ccvs.group(1)
-                name = "H" + name_suffix if name_suffix else f"H_auto{h_source_count}"
-                node_p, node_n = m_ccvs.group(2), m_ccvs.group(3)
-                control_vs_suffix = m_ccvs.group(4)
-                control_source_fullname = f"VS{control_vs_suffix}"
-                try:
-                    gain = float(m_ccvs.group(5)) # Transresistance
-                    parsed_components_list.append({
-                        'type': 'CCVS', 'name': name,
-                        'nodes': (node_p, node_n),
-                        'control_nodes': None,
-                        'control_source_name': control_source_fullname,
-                        'gain': gain, 'value': gain,
-                        'original_line': f"# Original: {line_full}"
-                    })
-                except ValueError:
-                    error_log.append(L_PREFIX + f"Invalid numeric value for gain (transresistance) of CCVS {name}.")
-                    continue
-            elif m_cccs:
-                f_source_count += 1
-                name_suffix = m_cccs.group(1)
-                name = "F" + name_suffix if name_suffix else f"F_auto{f_source_count}"
-                node_out, node_in = m_cccs.group(2), m_cccs.group(3)
-                control_vs_suffix = m_cccs.group(4)
-                control_source_fullname = f"VS{control_vs_suffix}"
-                try:
-                    gain = float(m_cccs.group(5)) # Current gain
-                    parsed_components_list.append({
-                        'type': 'CCCS', 'name': name,
-                        'nodes': (node_out, node_in),
-                        'control_nodes': None,
-                        'control_source_name': control_source_fullname,
-                        'gain': gain, 'value': gain,
-                        'original_line': f"# Original: {line_full}"
-                    })
-                except ValueError:
-                    error_log.append(L_PREFIX + f"Invalid numeric value for gain (current gain) of CCCS {name}.")
                     continue
             elif m_vsy:
                 name_suffix = m_vsy.group(1)
@@ -3140,13 +3090,8 @@ class ACCircuitAnalyzerApp:
                     c_f = float(m_loady.group(8))
                     original_line_info = f"# Original: {line_full}"
 
-                    # nodes_phase_str = [node_a_str, node_b_str, node_c_str]
-                    # phase_labels = ['A', 'B', 'C']
-                    # for i in range(3):
-                    #    current_phase_node_str = nodes_phase_str[i]
-                    #    current_phase_label = phase_labels[i]
                     for current_phase_label, current_phase_node_str in [('A', node_a_str), ('B', node_b_str), ('C', node_c_str)]:
-                        if r_f > 1e-12: # Per prompt, or 1e-9 from previous diff
+                        if r_f > 1e-12: 
                             parsed_components_list.append({
                                 'type': 'R', 'name': f"R_{base_name}_{current_phase_label}", 'nodes': (current_phase_node_str, node_n_str),
                                 'value': r_f, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADY'})
@@ -3173,12 +3118,12 @@ class ACCircuitAnalyzerApp:
                     original_line_info = f"# Original: {line_full}"
 
                     delta_connections = [
-                        (node_a_str, node_b_str, "AB"), # node1_str, node2_str, phase_pair_label
+                        (node_a_str, node_b_str, "AB"), 
                         (node_b_str, node_c_str, "BC"),
                         (node_c_str, node_a_str, "CA") 
                     ]
                     for node1_str_conn, node2_str_conn, phase_pair_label in delta_connections:
-                        if r_fd > 1e-12: # Per prompt, or 1e-9 from previous diff
+                        if r_fd > 1e-12: 
                             parsed_components_list.append({
                                 'type': 'R', 'name': f"R_{base_name}_{phase_pair_label}", 'nodes': (node1_str_conn, node2_str_conn),
                                 'value': r_fd, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADD'})
@@ -3192,6 +3137,153 @@ class ACCircuitAnalyzerApp:
                                 'value': c_fd, 'original_line': original_line_info, 'three_phase_parent': base_name, 'three_phase_type': 'LOADD'}) 
                 except ValueError:
                     error_log.append(L_PREFIX + f"Invalid numeric value for LOADD {base_name}.")
+                    continue
+            elif m_e_vcvs: # VCVS (E component)
+                e_source_count += 1
+                name_suffix = m_e_vcvs.group(1)
+                name = "E" + name_suffix if name_suffix else f"E_auto{e_source_count}"
+                node_p, node_n = m_e_vcvs.group(2), m_e_vcvs.group(3)
+                ctrl_node_p, ctrl_node_n = m_e_vcvs.group(4), m_e_vcvs.group(5)
+                try:
+                    gain = float(m_e_vcvs.group(6))
+                    parsed_components_list.append({
+                        'type': 'VCVS', 'name': name,
+                        'nodes': (node_p, node_n),
+                        'control_nodes': (ctrl_node_p, ctrl_node_n),
+                        'control_source_name': None,
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
+                    })
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for gain of VCVS {name}.")
+                    continue
+            elif m_g_vccs: # VCCS (G component)
+                g_source_count += 1
+                name_suffix = m_g_vccs.group(1)
+                name = "G" + name_suffix if name_suffix else f"G_auto{g_source_count}"
+                node_out, node_in = m_g_vccs.group(2), m_g_vccs.group(3)
+                ctrl_node_p, ctrl_node_n = m_g_vccs.group(4), m_g_vccs.group(5)
+                try:
+                    gain = float(m_g_vccs.group(6)) # Transconductance
+                    parsed_components_list.append({
+                        'type': 'VCCS', 'name': name,
+                        'nodes': (node_out, node_in),
+                        'control_nodes': (ctrl_node_p, ctrl_node_n),
+                        'control_source_name': None,
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
+                    })
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for gain (transconductance) of VCCS {name}.")
+                    continue
+            elif m_h_ccvs: # CCVS (H component)
+                h_source_count += 1
+                name_suffix = m_h_ccvs.group(1)
+                name = "H" + name_suffix if name_suffix else f"H_auto{h_source_count}"
+                node_p, node_n = m_h_ccvs.group(2), m_h_ccvs.group(3)
+                control_vs_suffix = m_h_ccvs.group(4)
+                control_source_fullname = f"VS{control_vs_suffix}"
+                try:
+                    gain = float(m_h_ccvs.group(5)) # Transresistance
+                    parsed_components_list.append({
+                        'type': 'CCVS', 'name': name,
+                        'nodes': (node_p, node_n),
+                        'control_nodes': None,
+                        'control_source_name': control_source_fullname,
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
+                    })
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for gain (transresistance) of CCVS {name}.")
+                    continue
+            elif m_f_cccs: # CCCS (F component)
+                f_source_count += 1
+                name_suffix = m_f_cccs.group(1)
+                name = "F" + name_suffix if name_suffix else f"F_auto{f_source_count}"
+                node_out, node_in = m_f_cccs.group(2), m_f_cccs.group(3)
+                control_vs_suffix = m_f_cccs.group(4)
+                control_source_fullname = f"VS{control_vs_suffix}"
+                try:
+                    gain = float(m_f_cccs.group(5)) # Current gain
+                    parsed_components_list.append({
+                        'type': 'CCCS', 'name': name,
+                        'nodes': (node_out, node_in),
+                        'control_nodes': None,
+                        'control_source_name': control_source_fullname,
+                        'gain': gain, 'value': gain,
+                        'original_line': f"# Original: {line_full}"
+                    })
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for gain (current gain) of CCCS {name}.")
+                    continue
+            elif m_vs_mono: # Standard Monophase VS
+                vs_source_defined_count += 1
+                name_suffix = m_vs_mono.group(1)
+                name = "VS" + name_suffix if name_suffix else f"VS_auto{vs_source_defined_count}"
+                node1, node2 = m_vs_mono.group(2), m_vs_mono.group(3)
+                try:
+                    v_mag = float(m_vs_mono.group(4))
+                    v_phase_deg_str = m_vs_mono.group(5)
+                    v_phase_deg = float(v_phase_deg_str) if v_phase_deg_str and v_phase_deg_str.strip() else 0.0
+
+                    if v_mag < 0: # Conventionally, Vmag is positive.
+                        error_log.append(L_PREFIX + f"VS {name} magnitude was negative. Making positive and inverting phase.")
+                        v_mag = abs(v_mag)
+                        v_phase_deg = (v_phase_deg + 180)
+                    # Normalize phase to be within a common range e.g. -180 to 180
+                    v_phase_deg = (v_phase_deg + 180) % 360 - 180
+
+
+                    parsed_components_list.append({
+                        'type': 'VS', 'name': name, 'nodes': (node1, node2),
+                        'v_mag': v_mag, 'v_phase_deg': v_phase_deg,
+                        'value': v_mag, # 'value' for consistency, might represent magnitude
+                        'original_line': f"# Original: {line_full}"
+                    })
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for VS {name}.")
+                    continue
+            elif m_is_mono: # Standard Monophase IS
+                is_source_defined_count += 1
+                name_suffix = m_is_mono.group(1)
+                name = "IS" + name_suffix if name_suffix else f"IS_auto{is_source_defined_count}"
+                node_out, node_in = m_is_mono.group(2), m_is_mono.group(3) 
+                try:
+                    i_mag = float(m_is_mono.group(4))
+                    i_phase_deg_str = m_is_mono.group(5)
+                    i_phase_deg = float(i_phase_deg_str) if i_phase_deg_str and i_phase_deg_str.strip() else 0.0
+
+                    if i_mag < 0:
+                        error_log.append(L_PREFIX + f"IS {name} magnitude was negative. Making positive and inverting phase.")
+                        i_mag = abs(i_mag)
+                        i_phase_deg = (i_phase_deg + 180)
+                    i_phase_deg = (i_phase_deg + 180) % 360 - 180
+
+                    parsed_components_list.append({
+                        'type': 'IS', 'name': name, 'nodes': (node_out, node_in),
+                        'i_mag': i_mag, 'i_phase_deg': i_phase_deg,
+                        'value': i_mag, 
+                        'original_line': f"# Original: {line_full}"
+                    })
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for IS {name}.")
+                    continue
+            elif m_comp_rlc: # R, L, C components
+                comp_type_char = m_comp_rlc.group(1).upper()
+                name_suffix = m_comp_rlc.group(2)
+                name = comp_type_char + name_suffix if name_suffix else f"{comp_type_char}_auto{len(parsed_components_list)}"
+                node1, node2 = m_comp_rlc.group(3), m_comp_rlc.group(4)
+                try:
+                    value = float(m_comp_rlc.group(5))
+                    if value < 0:
+                        error_log.append(L_PREFIX + f"Component {comp_type_char} {name} value ({value}) cannot be negative. Using absolute value.")
+                        value = abs(value) # Or error out depending on strictness
+                    parsed_components_list.append({
+                        'type': comp_type_char, 'name': name, 'nodes': (node1, node2), 'value': value,
+                        'original_line': f"# Original: {line_full}"
+                    })
+                except ValueError:
+                    error_log.append(L_PREFIX + f"Invalid numeric value for {comp_type_char} {name}.")
                     continue
             else:
                 error_log.append(L_PREFIX + f"Unrecognized netlist syntax: '{line_full}'")
@@ -4421,28 +4513,32 @@ class ACCircuitAnalyzerApp:
         output_text=""
         self.three_phase_source_details_map = {} # Reset for current analysis
 
+        # --- Check for netlist content or generate from manual inputs ---
         netlist_content = self.netlist_textbox.get("1.0", tk.END).strip()
+        generated_from_manual = False
 
         if not netlist_content:
-            # --- Code path for manual RLC equivalent (OLD STYLE) ---
-            # This path can be kept if desired, or removed if nodal is the only way.
-            # For now, let's indicate it's not the primary path.
-            output_text += "Netlist is empty. Nodal analysis requires a netlist.\n"
-            output_text += "To use manual RLC equivalent mode (if still supported separately), ensure netlist is empty and fill manual fields.\n"
-            # Example: Call old _perform_core_analysis if you want to retain it
-            # params, errors = self._validate_all_parameters(silent=False)
-            # if params and not errors:
-            #   self.analysis_results = self._perform_core_analysis_RLC_Equivalent(params) # A renamed old function
-            #   analysis_details_text = self._generate_analysis_details_text(self.analysis_results) # Old text generator
-            #   output_text += analysis_details_text
-            #   self._update_static_circuit_diagram(self.analysis_results) # Old diagram
-            #   self._update_phasor_diagram(self.analysis_results) # Old phasor
-            # else: output_text += "Errors in manual parameters."
-            self.results_text.insert("1.0",output_text); self.results_text.configure(state="disabled")
-            self._clear_main_plot(error_message="Netlist empty for Nodal Analysis.")
-            self._clear_static_circuit_diagram(error_message="Netlist empty.")
-            return
-        # --- End manual RLC path ---
+            generated_netlist_str = self._generate_netlist_from_manual_inputs()
+            if generated_netlist_str:
+                netlist_content = generated_netlist_str
+                generated_from_manual = True
+                print("INFO: Netlist gerada a partir de entradas manuais e será usada para análise.")
+                # Optional: Fill the netlist textbox for the user to see
+                # self.netlist_textbox.delete("1.0", tk.END)
+                # self.netlist_textbox.insert("1.0", netlist_content)
+                # messagebox.showinfo("Geração de Netlist", 
+                #                     "Netlist gerada a partir das entradas manuais e será usada para análise.", 
+                #                     parent=self.master)
+            else:
+                # _generate_netlist_from_manual_inputs should have shown an error if validation failed.
+                # If it returned None due to no components selected, this message is appropriate.
+                output_text += "Netlist está vazia e não foi possível gerar uma a partir das entradas manuais.\nVerifique se os campos manuais estão preenchidos corretamente e se componentes foram incluídos."
+                self.results_text.insert("1.0", output_text)
+                self.results_text.configure(state="disabled")
+                self._clear_main_plot(error_message="Netlist vazia ou erro na entrada manual.")
+                self._clear_static_circuit_diagram(error_message="Netlist vazia ou erro na entrada manual.")
+                return
+        # --- End netlist generation from manual ---
 
         self.progress_bar_frame.pack(pady=(5,0),padx=10,fill="x",before=self.note_label); self.progress_bar.pack(pady=5,padx=0,fill="x"); self.progress_bar.start(); self.master.update_idletasks()
 
@@ -4512,6 +4608,261 @@ class ACCircuitAnalyzerApp:
 
         if self.analysis_performed_successfully:
             self.parsed_components_for_plotting = parsed_components # Store for plotter
+
+    def _get_validated_float_from_entry(self, entry_key, field_name, errors_list, error_fields_list, allow_zero=True, positive_only=False, allow_negative=False):
+        """Helper to get and validate a float from an entry widget."""
+        widget = self.entry_widgets.get(entry_key)
+        if not widget: # Should not happen if entry_widgets is maintained
+            errors_list.append(f"Widget de entrada para '{field_name}' não encontrado internamente.")
+            return None
+        
+        val_str = widget.get()
+        if not val_str.strip():
+            errors_list.append(f"Valor para '{field_name}' não pode ser vazio.")
+            error_fields_list.append(entry_key)
+            return None
+        try:
+            val = float(val_str)
+            if not allow_zero and abs(val) < 1e-12:
+                errors_list.append(f"Valor para '{field_name}' não pode ser zero.")
+                error_fields_list.append(entry_key)
+                return None
+            if positive_only and val < 0:
+                errors_list.append(f"Valor para '{field_name}' deve ser positivo ou zero.")
+                error_fields_list.append(entry_key)
+                return None
+            if not allow_negative and val < 0 and not positive_only : # general case, if not positive_only and not allow_negative
+                 errors_list.append(f"Valor para '{field_name}' não pode ser negativo.")
+                 error_fields_list.append(entry_key)
+                 return None
+            return val
+        except ValueError:
+            errors_list.append(f"Valor para '{field_name}' ('{val_str}') é inválido.")
+            error_fields_list.append(entry_key)
+            return None
+
+    def _analyze_manual_three_phase_circuit(self):
+        """
+        Reads manual 3-phase inputs, validates, generates netlist, and calls analyze_circuit.
+        """
+        self._clear_all_entry_error_styles()
+        errors = []
+        error_fields = []
+        
+        validated_params = {}
+
+        # Collect string values first
+        validated_params['source_voltage_type'] = self.manual_3ph_source_voltage_type_var.get()
+        validated_params['source_config'] = self.manual_3ph_source_config_var.get()
+        validated_params['sequence'] = self.manual_3ph_sequence_var.get()
+        validated_params['load_config'] = self.manual_3ph_load_config_var.get()
+
+        # Validate numeric inputs
+        validated_params['source_mag'] = self._get_validated_float_from_entry(
+            'manual_3ph_source_mag', "Mag. Tensão Fonte", errors, error_fields, positive_only=True
+        )
+        validated_params['source_phase_ref'] = self._get_validated_float_from_entry(
+            'manual_3ph_source_phase_ref', "Fase Ref. Fonte", errors, error_fields, allow_zero=True, allow_negative=True
+        )
+        validated_params['load_r'] = self._get_validated_float_from_entry(
+            'manual_3ph_load_r', "R Carga por Fase", errors, error_fields, positive_only=True
+        )
+        validated_params['load_l'] = self._get_validated_float_from_entry(
+            'manual_3ph_load_l', "L Carga por Fase", errors, error_fields, positive_only=True
+        )
+        validated_params['load_c'] = self._get_validated_float_from_entry(
+            'manual_3ph_load_c', "C Carga por Fase", errors, error_fields, positive_only=True
+        )
+        validated_params['freq'] = self._get_validated_float_from_entry(
+            'freq_details', "Frequência Global", errors, error_fields, allow_zero=False, positive_only=True
+        ) # Frequência é global e obrigatória
+
+        if errors:
+            for field_key in set(error_fields):
+                self._set_entry_error_style(field_key, True)
+            messagebox.showerror("Erro na Entrada Manual Trifásica", "\n".join(errors), parent=self.master)
+            return
+
+        # Call netlist generation
+        generated_netlist = self._generate_3ph_netlist_from_manual_params(validated_params)
+
+        if generated_netlist:
+            print(f"Netlist Trifásica Gerada Manualmente:\n{generated_netlist}") # DEBUG PRINT
+            if not generated_netlist.strip():
+                messagebox.showerror("Erro na Geração da Netlist",
+                                     "A netlist gerada está vazia. Verifique a lógica de geração.",
+                                     parent=self.master)
+                return
+
+            self.netlist_textbox.delete("1.0", tk.END)
+            self.netlist_textbox.insert("1.0", generated_netlist)
+            messagebox.showinfo("Netlist Trifásica Gerada", 
+                                "Netlist gerada a partir das entradas manuais trifásicas e carregada no analisador.\n"
+                                "A análise principal será executada.", parent=self.master)
+            self.analyze_circuit() # Call the main analysis function
+        else:
+            # This case should ideally be caught by validation or internal logic errors in generation
+            messagebox.showerror("Erro na Geração da Netlist", 
+                                 "Não foi possível gerar a netlist trifásica a partir dos parâmetros manuais.", 
+                                 parent=self.master)
+
+    def _generate_3ph_netlist_from_manual_params(self, params):
+        netlist_lines = ["# Netlist gerada a partir de entradas manuais trifásicas"]
+        
+        # Usar nós numéricos para compatibilidade com MNA
+        node_A, node_B, node_C = "1", "2", "3"
+        
+        # Definir os nomes dos nós neutros que serão usados nas f-strings abaixo.
+        # Para o modo manual simplificado, ambos são aterrados ("0").
+        node_source_neutral_if_Y = "0"  # Nó neutro para fonte Y
+        node_load_neutral_if_Y = "0"    # Nó neutro para carga Y
+
+        # Source
+        # Garantir que os valores numéricos de params sejam float antes de usar
+        source_mag_float = float(params['source_mag'])
+        source_phase_ref_float = float(params['source_phase_ref'])
+        sequence_val = params['sequence'] # String, não precisa de conversão
+
+        v_to_use_in_netlist = source_mag_float # Default: assume a magnitude correta para o tipo de fonte
+
+        if params['source_config'] == "Y (Estrela)":
+            # VSY espera V_fase. Se entrada foi V_linha, converter.
+            if params['source_voltage_type'] == "Linha (VL-L)":
+                v_to_use_in_netlist = source_mag_float / math.sqrt(3)
+            # Se entrada foi "Fase (Vf-N)", source_mag_float já é V_fase, então v_to_use_in_netlist está correto.
+        elif params['source_config'] == "Δ (Delta)":
+            # VSD espera V_linha. Se entrada foi V_fase, converter.
+            if params['source_voltage_type'] == "Fase (Vf-N)":
+                v_to_use_in_netlist = source_mag_float * math.sqrt(3)
+            # Se entrada foi "Linha (VL-L)", source_mag_float já é V_linha, então v_to_use_in_netlist está correto.
+
+        if params['source_config'] == "Y (Estrela)":
+            netlist_lines.append(f"VSY SRC_MANUAL {node_A} {node_B} {node_C} {node_source_neutral_if_Y} AC {v_to_use_in_netlist:.6g} {source_phase_ref_float:.4g} {sequence_val}")
+        elif params['source_config'] == "Δ (Delta)":
+            netlist_lines.append(f"VSD SRC_MANUAL {node_A} {node_B} {node_C} AC {v_to_use_in_netlist:.6g} {source_phase_ref_float:.4g} {sequence_val}")
+
+        # Load
+        load_r_float = float(params['load_r'])
+        load_l_float = float(params['load_l'])
+        load_c_float = float(params['load_c'])
+
+        if params['load_config'] == "Y (Estrela)":
+            netlist_lines.append(f"LOADY LOAD_MANUAL {node_A} {node_B} {node_C} {node_load_neutral_if_Y} {load_r_float:.6g} {load_l_float:.6g} {load_c_float:.6g}")
+        elif params['load_config'] == "Δ (Delta)":
+            netlist_lines.append(f"LOADD LOAD_MANUAL {node_A} {node_B} {node_C} {load_r_float:.6g} {load_l_float:.6g} {load_c_float:.6g}")
+
+        # Frequency - Garantir que params['freq'] é um float validado
+        freq_val = float(params.get('freq')) # params['freq'] is already float from validation
+        if freq_val is not None and isinstance(freq_val, (int, float)) and freq_val > 0:
+            netlist_lines.append(f"FREQ {freq_val:.4g}")
+        else: # Should be caught by validation in _analyze_manual_three_phase_circuit
+            netlist_lines.append(f"FREQ 60 # ERRO: Frequência inválida dos parâmetros ({freq_val}), usando padrão.")
+
+        return "\n".join(netlist_lines)
+
+    def _generate_netlist_from_manual_inputs(self):
+        """
+        Generates a netlist string from the manual RLC input fields.
+        Returns the netlist string or None if inputs are invalid or insufficient.
+        """
+        self._clear_all_entry_error_styles()
+        errors = []
+        error_fields = []
+
+        def get_manual_float(entry_widget_key, name, allow_zero=True, positive_only=False, can_be_optional_if_not_included=False, include_var=None):
+            widget = self.entry_widgets.get(entry_widget_key)
+            if not widget:
+                errors.append(f"Widget de entrada para '{name}' não encontrado.")
+                return None # Should not happen
+            
+            val_str = widget.get()
+            if can_be_optional_if_not_included and include_var and not include_var.get():
+                return 0.0 # Effectively not included, treat as 0 for netlist generation logic
+
+            if not val_str.strip():
+                errors.append(f"Valor para '{name}' não pode ser vazio.")
+                error_fields.append(entry_widget_key)
+                return None
+            try:
+                val = float(val_str)
+                if not allow_zero and abs(val) < 1e-12: # Effectively zero
+                    errors.append(f"Valor para '{name}' não pode ser zero.")
+                    error_fields.append(entry_widget_key)
+                    return None
+                if positive_only and val < 0: # Allow R=0, L=0, C=0 for inclusion logic
+                    if not (entry_widget_key in ['r_val', 'l_val', 'c_val'] and val == 0):
+                        errors.append(f"Valor para '{name}' deve ser positivo.")
+                        error_fields.append(entry_widget_key)
+                        return None
+                if entry_widget_key in ['r_val', 'l_val', 'c_val'] and val < 0:
+                     errors.append(f"Valor para '{name}' não pode ser negativo.")
+                     error_fields.append(entry_widget_key)
+                     return None
+                return val
+            except ValueError:
+                errors.append(f"Valor para '{name}' ('{val_str}') é inválido.")
+                error_fields.append(entry_widget_key)
+                return None
+
+        r_val = get_manual_float('r_val', "R_eq", include_var=self.include_r_var, can_be_optional_if_not_included=True)
+        l_val = get_manual_float('l_val', "L_eq", include_var=self.include_l_var, can_be_optional_if_not_included=True)
+        c_val = get_manual_float('c_val', "C_eq", include_var=self.include_c_var, can_be_optional_if_not_included=True)
+        v_mag_val = get_manual_float('v_mag', "Vmag Fonte")
+        v_phase_val = get_manual_float('v_phase_deg', "Fase Fonte", allow_zero=True, positive_only=False) # Phase can be 0 or negative
+        freq_val = get_manual_float('freq_details', "Frequência", allow_zero=False, positive_only=True)
+
+        if errors:
+            for field_key in set(error_fields):
+                self._set_entry_error_style(field_key, True)
+            messagebox.showerror("Entrada Manual Inválida", "\n".join(errors), parent=self.master)
+            return None
+
+        topology = self.circuit_topology_var.get()
+        netlist_lines = [f"# Netlist gerada a partir de entradas manuais ({topology})"]
+        netlist_lines.append(f"VS_manual 1 0 AC {v_mag_val} {v_phase_val}")
+
+        active_components = []
+        if self.include_r_var.get() and r_val is not None and r_val >= 0: # R=0 is a short
+            active_components.append({'type': 'R', 'name': 'R_manual', 'value': r_val})
+        if self.include_l_var.get() and l_val is not None and l_val > 1e-12: # L=0 is a short, effectively
+            active_components.append({'type': 'L', 'name': 'L_manual', 'value': l_val})
+        if self.include_c_var.get() and c_val is not None and c_val > 1e-15: # C=0 is an open
+            active_components.append({'type': 'C', 'name': 'C_manual', 'value': c_val})
+
+        if not active_components and not (self.include_r_var.get() and r_val == 0): # If only R=0 is selected, it's a short
+            # If no R,L,C selected (or only L=0, C=0), the source VS_manual 1 0 is effectively across a short (if R=0) or open.
+            # The MNA should handle this. If R=0 is explicitly included, it's a short.
+            # If no components are included, VS_manual 1 0 is fine.
+            pass # Source is already added.
+
+        if topology == "Série":
+            current_node_num = 1
+            next_available_node_num = 2
+            for i, comp_info in enumerate(active_components):
+                node1_str = str(current_node_num)
+                is_last_comp = (i == len(active_components) - 1)
+                node2_str = "0" if is_last_comp else str(next_available_node_num)
+                
+                netlist_lines.append(f"{comp_info['name']} {node1_str} {node2_str} {comp_info['value']}")
+                
+                if not is_last_comp:
+                    current_node_num = next_available_node_num
+                    next_available_node_num += 1
+        elif topology == "Paralelo":
+            if not active_components and not (self.include_r_var.get() and r_val == 0):
+                 messagebox.showwarning("Geração de Netlist", 
+                                       "Nenhum componente R, L ou C válido selecionado para topologia paralela. "
+                                       "A fonte estará efetivamente em circuito aberto ou curto (se R=0 for o único).", parent=self.master)
+            for comp_info in active_components:
+                netlist_lines.append(f"{comp_info['name']} 1 0 {comp_info['value']}")
+        
+        netlist_lines.append(f"FREQ {freq_val}")
+        
+        # If only VS_manual and FREQ are present, it's a valid netlist for MNA (source connected to ground).
+        if len(netlist_lines) <= 2 and not active_components: # Only header, VS, FREQ
+            print("INFO: Gerando netlist apenas com fonte e frequência (sem componentes passivos manuais).")
+
+        return "\n".join(netlist_lines)
 
     def _generate_nodal_analysis_details_text(self, nodal_results, parsed_components):
         if not nodal_results: return "A análise nodal não produziu resultados."
@@ -4773,64 +5124,210 @@ class ACCircuitAnalyzerApp:
         )
         print(f"[DEBUG] _clear_static_circuit_diagram executado. Mensagem: {message}")
 
+    def _draw_static_resistor(self, canvas, cx, cy, comp_data, color):
+        name = comp_data.get('name', 'R?')
+        value_str = self._format_value(comp_data.get('value'), "Ω")
+        width = 50; height = 20; leg_len = 15
+
+        # Body
+        canvas.create_rectangle(cx - width/2, cy - height/2, cx + width/2, cy + height/2, outline=color, width=1)
+        # Legs
+        canvas.create_line(cx - width/2 - leg_len, cy, cx - width/2, cy, fill=color, width=1)
+        canvas.create_line(cx + width/2, cy, cx + width/2 + leg_len, cy, fill=color, width=1)
+        # Texts
+        canvas.create_text(cx, cy - height/2 - 5, text=name, fill=color, anchor="s", font=("Arial", 8))
+        canvas.create_text(cx, cy + height/2 + 5, text=value_str, fill=color, anchor="n", font=("Arial", 8))
+
+        term1_coords = (cx - width/2 - leg_len, cy)
+        term2_coords = (cx + width/2 + leg_len, cy)
+        return [term1_coords, term2_coords]
+
+    def _draw_static_capacitor(self, canvas, cx, cy, comp_data, color):
+        name = comp_data.get('name', 'C?')
+        value_str = self._format_value(comp_data.get('value'), "F")
+        plate_gap = 6; plate_height = 15; leg_len = 20
+
+        # Plates
+        canvas.create_line(cx - plate_gap/2, cy - plate_height/2, cx - plate_gap/2, cy + plate_height/2, fill=color, width=1)
+        canvas.create_line(cx + plate_gap/2, cy - plate_height/2, cx + plate_gap/2, cy + plate_height/2, fill=color, width=1)
+        # Legs
+        canvas.create_line(cx - plate_gap/2 - leg_len, cy, cx - plate_gap/2, cy, fill=color, width=1)
+        canvas.create_line(cx + plate_gap/2, cy, cx + plate_gap/2 + leg_len, cy, fill=color, width=1)
+        # Texts
+        canvas.create_text(cx, cy - plate_height/2 - 5, text=name, fill=color, anchor="s", font=("Arial", 8))
+        canvas.create_text(cx, cy + plate_height/2 + 5, text=value_str, fill=color, anchor="n", font=("Arial", 8))
+
+        term1_coords = (cx - plate_gap/2 - leg_len, cy)
+        term2_coords = (cx + plate_gap/2 + leg_len, cy)
+        return [term1_coords, term2_coords]
+
+    def _draw_static_inductor(self, canvas, cx, cy, comp_data, color):
+        name = comp_data.get('name', 'L?')
+        value_str = self._format_value(comp_data.get('value'), "H")
+        num_loops = 3; loop_radius = 6; leg_len = 15
+        total_body_width = num_loops * loop_radius * 1.5 # Approximate
+
+        start_x_body = cx - total_body_width / 2
+        for i in range(num_loops):
+            loop_cx = start_x_body + i * (loop_radius * 1.5) + loop_radius / 2
+            canvas.create_arc(
+                loop_cx - loop_radius, cy - loop_radius, loop_cx + loop_radius, cy + loop_radius,
+                start=0, extent=180, style=tk.ARC, outline=color, width=1)
+        # Legs
+        canvas.create_line(start_x_body - leg_len, cy, start_x_body, cy, fill=color, width=1)
+        canvas.create_line(start_x_body + total_body_width, cy, start_x_body + total_body_width + leg_len, cy, fill=color, width=1)
+        # Texts
+        canvas.create_text(cx, cy - loop_radius - 5, text=name, fill=color, anchor="s", font=("Arial", 8))
+        canvas.create_text(cx, cy + loop_radius + 5, text=value_str, fill=color, anchor="n", font=("Arial", 8))
+
+        term1_coords = (start_x_body - leg_len, cy)
+        term2_coords = (start_x_body + total_body_width + leg_len, cy)
+        return [term1_coords, term2_coords]
+
+    def _draw_static_vs(self, canvas, cx, cy, comp_data, color):
+        name = comp_data.get('name', 'VS?')
+        v_mag = comp_data.get('v_mag', 0)
+        v_phase = comp_data.get('v_phase_deg', 0)
+        value_str = f"{self._format_value(v_mag, 'V')} ∠ {self._format_value(v_phase, '°')}"
+        radius = 12; leg_len = 15
+
+        # Body
+        canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline=color, width=1)
+        # Polarity (simple + on top for vertical orientation)
+        canvas.create_text(cx, cy - radius/2.5, text="+", fill=color, font=("Arial", 10))
+        canvas.create_text(cx, cy + radius/2.5, text="-", fill=color, font=("Arial", 12)) # Make minus slightly larger
+        # Legs (vertical)
+        canvas.create_line(cx, cy - radius - leg_len, cx, cy - radius, fill=color, width=1) # Top leg
+        canvas.create_line(cx, cy + radius, cx, cy + radius + leg_len, fill=color, width=1) # Bottom leg
+        # Texts
+        canvas.create_text(cx + radius + 5, cy - radius, text=name, fill=color, anchor="nw", font=("Arial", 8))
+        canvas.create_text(cx + radius + 5, cy, text=value_str, fill=color, anchor="w", font=("Arial", 8))
+
+        term1_coords = (cx, cy - radius - leg_len) # Top terminal (positive)
+        term2_coords = (cx, cy + radius + leg_len) # Bottom terminal (negative)
+        return [term1_coords, term2_coords]
+
+    def _draw_static_is(self, canvas, cx, cy, comp_data, color):
+        name = comp_data.get('name', 'IS?')
+        i_mag = comp_data.get('i_mag', 0)
+        i_phase = comp_data.get('i_phase_deg', 0)
+        value_str = f"{self._format_value(i_mag, 'A')} ∠ {self._format_value(i_phase, '°')}"
+        radius = 12; leg_len = 15; arrow_len_half = radius * 0.5
+
+        # Body
+        canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline=color, width=1)
+        # Arrow (pointing upwards for vertical orientation, current exiting top)
+        canvas.create_line(cx, cy + arrow_len_half, cx, cy - arrow_len_half, fill=color, arrow=tk.LAST, width=1)
+        # Legs (vertical)
+        canvas.create_line(cx, cy - radius - leg_len, cx, cy - radius, fill=color, width=1) # Top leg (output)
+        canvas.create_line(cx, cy + radius, cx, cy + radius + leg_len, fill=color, width=1) # Bottom leg (input)
+        # Texts
+        canvas.create_text(cx + radius + 5, cy - radius, text=name, fill=color, anchor="nw", font=("Arial", 8))
+        canvas.create_text(cx + radius + 5, cy, text=value_str, fill=color, anchor="w", font=("Arial", 8))
+
+        term1_coords = (cx, cy - radius - leg_len) # Top terminal (current out)
+        term2_coords = (cx, cy + radius + leg_len) # Bottom terminal (current in)
+        return [term1_coords, term2_coords]
+
     def _update_static_circuit_diagram_from_netlist(self, parsed_components, frequency, analysis_results):
-        # Placeholder - drawing arbitrary netlists is complex. For now, lists components.
         if not self.circuit_diagram_canvas:
             print("[DEBUG] Canvas do diagrama de circuito não existe para netlist.")
             return
-        self.circuit_diagram_canvas.delete("all")
+        self.circuit_diagram_canvas.delete("all") # Clear canvas
         bg_color = self._get_ctk_bg_color()
         text_color = self._get_ctk_text_color()
         self.circuit_diagram_canvas.configure(bg=bg_color)
-
-        # Ensure canvas dimensions are available
         self.circuit_diagram_canvas.update_idletasks()
-        cw = self.circuit_diagram_canvas.winfo_width()
-        ch = self.circuit_diagram_canvas.winfo_height()
-
-        if cw <= 1: cw = 400  # Fallback width
-        if ch <= 1: ch = max(200, len(parsed_components) * 15 + 40) # Dynamic fallback height
 
         if not parsed_components:
             self._clear_static_circuit_diagram(initial_message="Nenhum componente na netlist para desenhar.")
             return
+
+        self.static_diagram_terminal_coords = {} # Reset for this diagram
+
+        current_x = 70  # Initial X position (increased for more margin)
+        current_y = 60  # Initial Y position
+        x_increment = 120 # Horizontal spacing for R,L,C
+        vs_is_x_increment = 80 # Horizontal spacing for VS, IS (often narrower)
+        y_increment_per_row = 100 # Vertical spacing for new row
+        # max_width = self.circuit_diagram_canvas.winfo_width() - x_increment # Adjusted max_width
+        # Ensure winfo_width is valid
+        canvas_actual_width = self.circuit_diagram_canvas.winfo_width()
+        if canvas_actual_width <=1: canvas_actual_width = 600 # Fallback if not rendered
+        max_width = canvas_actual_width - 70 # Leave some margin on the right
+
+        for comp_data in parsed_components:
+            comp_type = comp_data.get('type', '').upper()
+            comp_name = comp_data.get('name', 'N/A')
+            comp_nodes = comp_data.get('nodes', [])
+
+            terminal_coords_for_this_comp = []
+            current_comp_x_increment = x_increment # Default increment
+
+            if comp_type == 'R':
+                terminal_coords_for_this_comp = self._draw_static_resistor(self.circuit_diagram_canvas, current_x, current_y, comp_data, text_color)
+            elif comp_type == 'L':
+                terminal_coords_for_this_comp = self._draw_static_inductor(self.circuit_diagram_canvas, current_x, current_y, comp_data, text_color)
+            elif comp_type == 'C':
+                terminal_coords_for_this_comp = self._draw_static_capacitor(self.circuit_diagram_canvas, current_x, current_y, comp_data, text_color)
+            elif comp_type == 'VS':
+                terminal_coords_for_this_comp = self._draw_static_vs(self.circuit_diagram_canvas, current_x, current_y, comp_data, text_color)
+                current_comp_x_increment = vs_is_x_increment
+            elif comp_type == 'IS':
+                terminal_coords_for_this_comp = self._draw_static_is(self.circuit_diagram_canvas, current_x, current_y, comp_data, text_color)
+                current_comp_x_increment = vs_is_x_increment
+            # TODO: Add elif for E, G, H, F if visual representation is desired here.
+            # For now, they will be skipped in the visual diagram but data is available.
+
+            if terminal_coords_for_this_comp and len(comp_nodes) == len(terminal_coords_for_this_comp):
+                for i, _ in enumerate(comp_nodes): # node_name_str not directly used for key here
+                    terminal_id_in_comp = i 
+                    self.static_diagram_terminal_coords[(comp_name, terminal_id_in_comp)] = terminal_coords_for_this_comp[i]
+            
+            current_x += current_comp_x_increment
+            if current_x > max_width:
+                current_x = 70 # Reset X to initial margin
+                current_y += y_increment_per_row
         
-        y_pos = 20
-        self.circuit_diagram_canvas.create_text(10, y_pos, anchor="nw",
-                                                text=f"Diagrama de Circuito (Baseado na Netlist - Simplificado)",
-                                                fill=text_color, font=("Arial", 11, "bold"))
-        y_pos += 25
+        self._draw_static_wires(self.circuit_diagram_canvas, parsed_components, 
+                                self.static_diagram_terminal_coords, text_color)
+        print(f"[Aba Circuito] Desenho estático de componentes concluído. Coordenadas de terminais: {self.static_diagram_terminal_coords}")
+        print("[Aba Circuito] Desenho estático de fios concluído.")
 
-        for comp in parsed_components:
-            comp_details = f"{comp['name']} ({comp['type']}): Nós {comp['nodes'][0]}-{comp['nodes'][1]}"
-            if comp['type'] == 'VS':
-                val_str = f"AC {comp['v_mag']}V ∠{comp['v_phase_deg']}°"
-            else:
-                if comp['type'] == 'IS':
-                    val_str = f"AC {comp['i_mag']}A ∠{comp['i_phase_deg']}°"
-                else: # R, L, C
-                    unit = "Ω" if comp['type'] == 'R' else ("H" if comp['type'] == 'L' else "F")
-                val_str = f"{comp['value']}{unit}"
-            comp_details += f", Valor: {val_str}"
+    def _draw_static_wires(self, canvas, parsed_components, component_terminal_coords, line_color):
+        node_to_canvas_terminals_map = {}
 
-            self.circuit_diagram_canvas.create_text(15, y_pos, text=comp_details, anchor="w", fill=text_color, font=("Arial", 9))
-            y_pos += 18
-            if y_pos > ch - 20: # Stop if overflowing (simple check)
-                self.circuit_diagram_canvas.create_text(15, y_pos, text="...", anchor="w", fill=text_color)
-                break
+        for comp_data in parsed_components:
+            comp_name = comp_data.get('name')
+            comp_netlist_nodes = comp_data.get('nodes', []) # Ex: ['1', '0']
+
+            for i, node_name_on_netlist in enumerate(comp_netlist_nodes):
+                # A chave em component_terminal_coords é (comp_name, terminal_index)
+                terminal_canvas_pos = component_terminal_coords.get((comp_name, i))
+                
+                if terminal_canvas_pos:
+                    if node_name_on_netlist not in node_to_canvas_terminals_map:
+                        node_to_canvas_terminals_map[node_name_on_netlist] = []
+                    # Adicionar apenas se já não estiver lá (evita duplicatas se um nó se conecta a múltiplos terminais do mesmo componente)
+                    if terminal_canvas_pos not in node_to_canvas_terminals_map[node_name_on_netlist]:
+                         node_to_canvas_terminals_map[node_name_on_netlist].append(terminal_canvas_pos)
+
+        # Desenhar fios
+        for node_name, list_of_terminal_coords in node_to_canvas_terminals_map.items():
+            if len(list_of_terminal_coords) >= 2:
+                # Opção 1: Usar o primeiro terminal como "hub" do nó
+                hub_x, hub_y = list_of_terminal_coords[0]
+                
+                node_dot_radius = 2 # Smaller radius for the dot
+                canvas.create_oval(hub_x - node_dot_radius, hub_y - node_dot_radius, 
+                                   hub_x + node_dot_radius, hub_y + node_dot_radius, 
+                                   fill=line_color, outline=line_color, tags=("static_node_dot", f"node_{node_name}"))
+
+                for i in range(1, len(list_of_terminal_coords)): # Conectar outros terminais ao hub
+                    term_x, term_y = list_of_terminal_coords[i]
+                    canvas.create_line(hub_x, hub_y, term_x, term_y, fill=line_color, width=1, tags=("static_wire", f"node_{node_name}"))
         
-        # Add ground symbol (conceptual)
-        if '0' in [node for comp_item in parsed_components for node in comp_item['nodes']]:
-            gnd_x, gnd_y_base = cw - 30, ch - 20
-            if gnd_y_base > 30 : # Only draw if space
-                self.circuit_diagram_canvas.create_line(gnd_x, gnd_y_base - 10, gnd_x, gnd_y_base, fill=text_color, width=1.5) # Vertical line
-                self.circuit_diagram_canvas.create_line(gnd_x - 10, gnd_y_base, gnd_x + 10, gnd_y_base, fill=text_color, width=1.5) # Longest horizontal
-                self.circuit_diagram_canvas.create_line(gnd_x - 6, gnd_y_base + 3, gnd_x + 6, gnd_y_base + 3, fill=text_color, width=1.5) # Medium
-                self.circuit_diagram_canvas.create_line(gnd_x - 3, gnd_y_base + 6, gnd_x + 3, gnd_y_base + 6, fill=text_color, width=1.5) # Shortest
-                self.circuit_diagram_canvas.create_text(gnd_x, gnd_y_base - 15, text="0", fill=text_color, font=("Arial", 8))
-
-
-        print("[DEBUG] _update_static_circuit_diagram_from_netlist (placeholder) executado.")
+        canvas.tag_raise("static_node_dot") # Ensure node dots are drawn on top of wires
 
     def _update_phasor_diagram_from_nodal(self, nodal_results):
         if not self.ax_main_plot or not nodal_results or not self.analysis_performed_successfully :
